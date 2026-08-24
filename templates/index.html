@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CestaSmart 2.0 Cloud</title>
+<style>
+:root{--g:#1d8f55;--g2:#e7f6ed;--line:#e1e8e3;--ink:#17211b;--muted:#66736b;--red:#a33}
+*{box-sizing:border-box}body{margin:0;background:#f5f8f6;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;color:var(--ink)}
+.app{max-width:740px;margin:auto;padding:20px 14px 80px}.brand{font-size:31px;font-weight:900}.brand span{color:var(--g)}
+.card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:15px;margin:12px 0}
+h2{font-size:17px;margin:0 0 10px}.small{font-size:12px;color:var(--muted)}input,select{width:100%;padding:12px;border:1px solid var(--line);border-radius:12px;font-size:14px;background:white}
+.row{display:grid;grid-template-columns:160px 1fr auto;gap:8px}button{border:0;border-radius:12px;padding:11px 12px;font-weight:800;cursor:pointer}.primary{background:var(--g);color:#fff}.secondary{background:var(--g2);color:var(--g)}
+.result{padding:10px 0;border-bottom:1px solid var(--line)}.result:last-child{border-bottom:0}.price{font-size:22px;font-weight:900;color:var(--g)}.badge{display:inline-block;background:var(--g2);color:var(--g);padding:4px 7px;border-radius:999px;font-size:10px;font-weight:800}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.store{border:1px solid var(--line);border-radius:12px;padding:10px}.store input{width:auto}.err{color:var(--red)}
+.examples{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}.examples button{background:#f3f6f4;color:#435147;padding:8px}
+
+.scannerCard{display:none}
+.scannerWrap{position:relative;border-radius:16px;overflow:hidden;background:#111;aspect-ratio:4/3;margin-top:10px}
+.scannerWrap video{width:100%;height:100%;object-fit:cover}
+.scanbox{position:absolute;inset:20% 10%;border:3px solid rgba(255,255,255,.9);border-radius:14px;box-shadow:0 0 0 9999px rgba(0,0,0,.25)}
+.scanline{position:absolute;left:12%;right:12%;top:50%;height:2px;background:#fff}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+
+</style></head>
+<body><div class="app">
+<div class="brand">Cesta<span>Smart</span></div><div class="small">2.0 Cloud · catálogo maestro + PostgreSQL</div>
+
+<div class="card"><h2>Buscar producto</h2>
+<div class="row"><select id="searchStore"><option value="mercadona">Mercadona</option><option value="gadis">Gadis</option><option value="dia">DIA</option><option value="lidl">Lidl</option></select><input id="q" value="huevos 12 ud"><button class="primary" onclick="searchProduct()">Buscar</button></div>
+<div style="margin-top:8px"><input id="ean" placeholder="EAN/GTIN opcional (si lo escaneas, tiene prioridad absoluta)"></div>
+<div class="toolbar">
+<button class="secondary" onclick="openScanner()">📷 Escanear EAN/GTIN</button>
+<button class="secondary" onclick="ean.value='';">Borrar EAN</button>
+</div>
+<div id="scannerCard" class="card scannerCard">
+  <h2>Escáner de código de barras</h2>
+  <div class="scannerWrap">
+    <video id="video" playsinline muted></video>
+    <div class="scanbox"></div><div class="scanline"></div>
+  </div>
+  <div id="scanStatus" class="small" style="margin-top:8px">Preparando cámara…</div>
+  <div class="small">Motor: <b id="scanEngine">—</b></div>
+  <div class="toolbar">
+    <button class="secondary" onclick="stopScanner()">Cerrar cámara</button>
+    <button class="secondary" onclick="manualCode()">Introducir código manualmente</button>
+  </div>
+</div>
+<div class="examples">
+<button onclick="q.value='huevos 12 ud'">Huevos 12</button>
+<button onclick="q.value='detergente 40 lavados'">Detergente 40 lavados</button>
+<button onclick="q.value='papel higienico 12 rollos'">Papel 12 rollos</button>
+<button onclick="q.value='yogur natural 4 x 125 g'">Yogur 4×125 g</button>
+</div>
+<div id="searchResults"></div></div>
+
+<div class="card"><h2>Cesta</h2><div id="items"></div>
+<div style="display:grid;grid-template-columns:1fr auto;gap:8px"><input id="newItem" placeholder="Ej. papel higienico 12 rollos"><button class="secondary" onclick="add()">Añadir</button></div></div>
+
+<div class="card"><h2>Comparar</h2><div class="grid">
+<label class="store"><input type="checkbox" value="mercadona" checked> Mercadona</label>
+<label class="store"><input type="checkbox" value="gadis" checked> Gadis</label>
+<label class="store"><input type="checkbox" value="dia" checked> DIA</label>
+<label class="store"><input type="checkbox" value="lidl" checked> Lidl</label>
+</div><button class="primary" style="width:100%;margin-top:10px" onclick="compareBasket()">Comparar cesta</button><div id="compareResults"></div></div>
+
+<div class="card"><div class="small"><b>Equivalencia por unidades:</b> si no existe el mismo formato, CestaSmart calcula cuántas unidades del producto alternativo hacen falta para cubrir la cantidad solicitada y usa ese coste equivalente en la comparación.</div></div>
+</div>
+<script src="/static_zxing"></script>
+<script>
+let stream=null,detector=null,scanning=false,zxingReader=null,zxingControls=null;
+let list=[{query:"huevos 12 ud",qty:1},{query:"detergente 40 lavados",qty:1},{query:"papel higienico 12 rollos",qty:1},{query:"yogur natural 4 x 125 g",qty:1}];
+function esc(s){return String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]))}
+
+function validEan(v){
+  const s=String(v||"").replace(/\D/g,"");
+  return [8,12,13,14].includes(s.length)?s:null;
+}
+async function openScanner(){
+  scannerCard.style.display="block";
+  scanStatus.className="small";
+  scanStatus.textContent="Preparando cámara…";
+  scanEngine.textContent="—";
+  if(!navigator.mediaDevices?.getUserMedia){
+    scanStatus.className="small err";
+    scanStatus.textContent="Este navegador no permite acceso a cámara.";
+    return;
+  }
+  if("BarcodeDetector" in window){
+    try{
+      stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}},audio:false});
+      video.srcObject=stream;
+      await video.play();
+      try{detector=new BarcodeDetector({formats:["ean_13","ean_8","upc_a","upc_e","code_128"]})}
+      catch(e){detector=new BarcodeDetector()}
+      scanning=true;
+      scanEngine.textContent="BarcodeDetector";
+      scanStatus.textContent="Apunta al código de barras…";
+      nativeScanLoop();
+      return;
+    }catch(e){}
+  }
+  await startZXing();
+}
+async function nativeScanLoop(){
+  if(!scanning||!detector)return;
+  try{
+    const codes=await detector.detect(video);
+    if(codes?.length){
+      const value=validEan(codes[0].rawValue);
+      if(value){onScanned(value);return;}
+    }
+  }catch(e){
+    cleanupNative();
+    await startZXing();
+    return;
+  }
+  requestAnimationFrame(nativeScanLoop);
+}
+async function startZXing(){
+  scanEngine.textContent="ZXing local";
+  if(!window.ZXing){
+    scanStatus.className="small err";
+    scanStatus.textContent="ZXing local no está preparado. Ejecuta PREPARAR_ZXING_WINDOWS.bat o usa entrada manual.";
+    return;
+  }
+  try{
+    zxingReader=new ZXing.BrowserMultiFormatReader();
+    scanStatus.textContent="Apunta al código de barras…";
+    zxingControls=await zxingReader.decodeFromVideoDevice(undefined,video,(result,err)=>{
+      if(result){
+        const value=validEan(result.getText());
+        if(value)onScanned(value);
+      }
+    });
+  }catch(e){
+    scanStatus.className="small err";
+    scanStatus.textContent="No se pudo abrir la cámara con ZXing. Usa entrada manual.";
+  }
+}
+function cleanupNative(){
+  scanning=false; detector=null;
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+  try{video.srcObject=null}catch(e){}
+}
+function cleanupZXing(){
+  try{zxingControls?.stop?.()}catch(e){}
+  try{zxingReader?.reset?.()}catch(e){}
+  zxingControls=null;zxingReader=null;
+}
+function stopScanner(){
+  cleanupNative();cleanupZXing();
+  scannerCard.style.display="none";
+}
+function onScanned(value){
+  ean.value=value;
+  scanStatus.textContent="Código detectado: "+value;
+  stopScanner();
+  searchProduct();
+}
+function manualCode(){
+  const v=prompt("Introduce EAN/GTIN:");
+  if(v===null)return;
+  const code=validEan(v);
+  if(!code){alert("EAN/GTIN no válido.");return;}
+  onScanned(code);
+}
+
+function render(){items.innerHTML=list.map((x,i)=>`<div class="result"><b>${esc(x.query)}</b> × ${x.qty}<button class="secondary" style="float:right;padding:5px 8px" onclick="list.splice(${i},1);render()">×</button></div>`).join("")}
+function add(){let v=newItem.value.trim();if(!v)return;list.push({query:v,qty:1});newItem.value="";render()}
+function unitLabel(p){return p.functional_unit?.unit_label||"unidad normalizada"}
+async function searchProduct(){searchResults.innerHTML="Buscando...";let r=await fetch(`/api/search?store=${encodeURIComponent(searchStore.value)}&q=${encodeURIComponent(q.value)}&ean=${encodeURIComponent(ean.value)}`);let d=await r.json();if(!r.ok){searchResults.innerHTML=`<div class="result err">${esc(d.error||"Error")}</div>`;return}searchResults.innerHTML=(d.products||[]).map(p=>`<div class="result"><b>${esc(p.name)}</b><div class="price">${Number(p.price).toFixed(2).replace(".",",")} €</div>${p.normalized_price!=null?`<span class="badge">${Number(p.normalized_price).toFixed(3).replace(".",",")} ${esc(unitLabel(p))}</span>`:""} ${p.exact_ean_match?`<span class="badge">EAN EXACTO</span>`:""} ${p.confidence?`<span class="badge">${p.confidence==="alta"?"ALTA":p.confidence==="probable"?"PROBABLE":"RECHAZADA"}</span>`:""} ${p.category?`<span class="badge">${esc(p.category)}</span>`:""} ${p.semantic_score!=null?`<span class="badge">similitud ${Math.round(p.semantic_score*100)}%</span>`:""} ${p.equivalent_units?.units_needed>1?`<div class="small">Equivalencia: ${p.equivalent_units.units_needed} unidades → ${Number(p.equivalent_cost).toFixed(2).replace(".",",")} €</div>`:""}</div>`).join("")||"<div class='result'>Sin equivalentes válidos.</div>"}
+async function compareBasket(){compareResults.innerHTML="Comparando...";let stores=[...document.querySelectorAll(".store input:checked")].map(x=>x.value);let r=await fetch("/api/compare",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({stores,items:list})});let d=await r.json();if(!r.ok){compareResults.innerHTML=`<div class="result err">${esc(d.error||"Error")}</div>`;return}compareResults.innerHTML=(d.results||[]).map((x,i)=>`<div class="result"><b>${i===0?"🏆 ":""}${esc(x.label)}</b><div class="price">${Number(x.total).toFixed(2).replace(".",",")} €</div><div class="small">${x.unresolved} líneas sin resolver</div>${(x.items||[]).map(y=>y.matched?`<div class="small">• ${esc(y.query)} → ${esc(y.matched.name)} (${Number(y.line_total).toFixed(2).replace(".",",")} €${y.units_needed>1?` · ${y.units_needed} unidades equivalentes`:""}${y.matched.normalized_price!=null?` · ${Number(y.matched.normalized_price).toFixed(3).replace(".",",")} ${esc(y.matched.functional_unit?.unit_label||"")}`:""} · ${esc((y.matched.confidence||"alta").toUpperCase())})</div>`:`<div class="small">• ${esc(y.query)} → sin equivalente</div>`).join("")}</div>`).join("")}
+render();
+</script></body></html>

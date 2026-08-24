@@ -1,0 +1,14 @@
+CESTASMART 2.0 CLOUD — PASOS
+
+1. Crear cuenta en GitHub.
+2. Crear repositorio nuevo llamado, por ejemplo, cestasmart.
+3. Subir TODOS los archivos de esta carpeta al repositorio.
+4. Crear cuenta en Render.
+5. En Render: New > Blueprint.
+6. Conectar el repositorio cestasmart.
+7. Render leerá render.yaml y creará web + PostgreSQL.
+8. Confirmar Apply/Deploy.
+9. Abrir la URL que entregue Render.
+10. Comprobar /api/health.
+
+No debes subir ningún archivo .env con contraseñas.

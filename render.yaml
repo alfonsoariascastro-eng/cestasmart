@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: cestasmart-api
+    runtime: docker
+    plan: free
+    region: frankfurt
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: cestasmart-db
+          property: connectionString
+      - key: GROCERY_CONFIG_DIR
+        value: /tmp/grocery
+
+databases:
+  - name: cestasmart-db
+    plan: free
+    region: frankfurt
+    databaseName: cestasmart
+    user: cestasmart
