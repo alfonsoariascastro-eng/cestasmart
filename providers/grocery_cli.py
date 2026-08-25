@@ -11,7 +11,7 @@ STORES = {
     "mercadona": {"label":"Mercadona","key":"mercadona","aliases":["mercadona"]},
     "gadis": {"label":"Gadis","key":"gadis","aliases":["gadis"]},
     "dia": {"label":"DIA","key":"dia","aliases":["dia"]},
-    "lidl": {"label":"Lidl","key":"lidl-es","aliases":["lidl-es","lidl","lidl_es","lidl-spain"]},
+    "lidl": {"label":"Lidl","key":"lidl-es","aliases":["lidl-es"]},
     "carrefour": {"label":"Carrefour","key":None},
 }
 
@@ -111,6 +111,24 @@ def token_similarity(a,b):
     inter=len(ta & tb)
     return inter / max(1,len(ta))
 
+
+def is_primary_egg_product(product_name):
+    n=norm(product_name)
+    toks=set(n.split())
+    bad={"nido","nidos","pasta","fideo","fideos","tallarines","espagueti","espaguetis",
+         "macarron","macarrones","noodles","mayonesa","salsa","galleta","galletas",
+         "bizcocho","tarta","tortilla","rebozado","chocolate","chocolatina","golosina",
+         "golosinas","caramelo","caramelos","sorpresa","juguete","dulce","dulces",
+         "bombon","bombones"}
+    if toks & bad or not ({"huevo","huevos"} & toks):
+        return False
+    return (
+        bool(re.search(r"\b(6|10|12|18|24|30)\b",n))
+        or any(k in toks for k in {"fresco","frescos","campero","camperos","ecologico",
+                                   "ecologicos","docena","docenas","clase","calibre",
+                                   "gallina","gallinas","xl","l","m","s"})
+    )
+
 def semantic_validate(query, product_name):
     qn=norm(query); pn=norm(product_name)
     qt=set(qn.split()); pt=set(pn.split())
@@ -118,6 +136,8 @@ def semantic_validate(query, product_name):
 
     if qcat != pcat:
         return False, "categoría distinta", 0.0
+    if qcat=="huevos" and not is_primary_egg_product(product_name):
+        return False, "no es un producto principal de huevos", 0.0
 
     rules=CATEGORY_RULES.get(qcat)
     if rules:
@@ -780,6 +800,16 @@ class GroceryCLI:
         for p in found:uniq[(p["name"],p["price"])]=p
         return list(uniq.values())
 
+    def diagnose_store(self,store):
+        key="lidl-es" if store=="lidl" else (STORES.get(store) or {}).get("key")
+        try:
+            p=subprocess.run(["grocery","--store",key,"search","leche","--limit","1","--json"],
+                             text=True,capture_output=True,timeout=60)
+            return {"store":store,"key":key,"ok":p.returncode==0,
+                    "stdout":(p.stdout or "")[:500],"stderr":(p.stderr or "")[:500]}
+        except Exception as e:
+            return {"store":store,"key":key,"ok":False,"error":str(e)}
+
     def search(self,store,query,limit=8,ean=None):
         cfg=STORES.get(store)
         if not cfg or not cfg["key"]:
@@ -787,7 +817,7 @@ class GroceryCLI:
 
         requested_ean=normalize_ean(ean)
         search_term=query
-        store_key=self._store_key(store)
+        store_key=("lidl-es" if store=="lidl" else self._store_key(store))
         data=self._run(["--store",store_key,"search",search_term,"--limit","40","--json"])
         products=self._collect_products(data)
 
