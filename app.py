@@ -29,7 +29,7 @@ def static_zxing():
 def health():
     status={
         "ok": True,
-        "app":"CestaSmart 2.0 Cloud",
+        "app":"CestaSmart 2.4 Cloud",
         "grocery_cli":grocery.available(),
         "database":DB_READY,
     }
@@ -39,7 +39,7 @@ def health():
 
 @app.route("/api/status")
 def status():
-    data={"app":"CestaSmart 2.0 Cloud","grocery":grocery.status(),"database":DB_READY}
+    data={"app":"CestaSmart 2.4 Cloud","grocery":grocery.status(),"database":DB_READY}
     if DB_READY:
         try:data["catalog"]=catalog_stats()
         except Exception:pass
@@ -65,6 +65,19 @@ def search():
             try:save_search(store,q,ean,result)
             except Exception as db_exc:result["catalog_warning"]=str(db_exc)
         return jsonify(result)
+    except ProviderError as e:
+        return jsonify({"error":str(e)}),503
+
+
+@app.route("/api/optimize",methods=["POST"])
+def optimize():
+    b=request.get_json(force=True) or {}
+    try:
+        return jsonify(grocery.optimize(
+            b.get("stores") or [],
+            b.get("items") or [],
+            b.get("options") or {}
+        ))
     except ProviderError as e:
         return jsonify({"error":str(e)}),503
 

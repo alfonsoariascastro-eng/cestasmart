@@ -1,4 +1,4 @@
-CESTASMART 2.0 CLOUD — PASOS
+CESTASMART 2.1 CLOUD — PASOS
 
 1. Crear cuenta en GitHub.
 2. Crear repositorio nuevo llamado, por ejemplo, cestasmart.

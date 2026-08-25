@@ -1,4 +1,4 @@
-# CestaSmart 2.0 Cloud
+# CestaSmart 2.3 Cloud
 
 Versión preparada para desplegar CestaSmart en Internet con **Render + PostgreSQL**.
 
@@ -73,3 +73,19 @@ Esta versión es apta para un **piloto privado**. Antes de abrirla masivamente a
 - política de privacidad;
 - monitorización y alertas;
 - fuentes comerciales/autorizadas para precios cuando proceda.
+
+
+## Principio central 2.3
+
+CestaSmart prioriza **precio primero, misma calidad**.
+La marca se ignora por defecto. Solo actúa como restricción cuando el usuario la protege expresamente.
+Las promociones de otras marcas entran automáticamente si mantienen la categoría, calidad y equivalencia de formato.
+
+
+## Optimizador 2.4
+
+CestaSmart calcula ahora dos escenarios:
+1. Mejor tienda única.
+2. Mejor cesta dividida.
+
+Solo recomienda dividir la compra si el ahorro adicional supera el umbral elegido, teniendo en cuenta los costes extra de desplazamiento o entrega.

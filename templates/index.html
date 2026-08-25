@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="es">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CestaSmart 2.0 Cloud</title>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CestaSmart 2.4 Cloud</title>
 <style>
 :root{--g:#1d8f55;--g2:#e7f6ed;--line:#e1e8e3;--ink:#17211b;--muted:#66736b;--red:#a33}
 *{box-sizing:border-box}body{margin:0;background:#f5f8f6;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;color:var(--ink)}
@@ -21,7 +21,12 @@ h2{font-size:17px;margin:0 0 10px}.small{font-size:12px;color:var(--muted)}input
 
 </style></head>
 <body><div class="app">
-<div class="brand">Cesta<span>Smart</span></div><div class="small">2.0 Cloud · catálogo maestro + PostgreSQL</div>
+<div class="brand">Cesta<span>Smart</span></div>
+<div class="card">
+  <h2>PRINCIPIO CESTASMART</h2>
+  <div class="small"><b>Primero, el precio.</b> La app busca siempre la opción más económica manteniendo la misma calidad. La marca no influye salvo que el usuario la proteja expresamente.</div>
+</div>
+<div class="small">2.0 Cloud · catálogo maestro + PostgreSQL</div>
 
 <div class="card"><h2>Buscar producto</h2>
 <div class="row"><select id="searchStore"><option value="mercadona">Mercadona</option><option value="gadis">Gadis</option><option value="dia">DIA</option><option value="lidl">Lidl</option></select><input id="q" value="huevos 12 ud"><button class="primary" onclick="searchProduct()">Buscar</button></div>
@@ -63,7 +68,44 @@ h2{font-size:17px;margin:0 0 10px}.small{font-size:12px;color:var(--muted)}input
 
 <div class="card"><div class="small"><b>Equivalencia por unidades:</b> si no existe el mismo formato, CestaSmart calcula cuántas unidades del producto alternativo hacen falta para cubrir la cantidad solicitada y usa ese coste equivalente en la comparación.</div></div>
 </div>
-<script src="/static_zxing"></script>
+<script src="/static_zxing">
+async function optimizeBasket(){
+  optimizerResults.innerHTML="Optimizando cesta...";
+  const stores=[...document.querySelectorAll(".store input:checked")].map(x=>x.value);
+  const options={
+    quality_mode:qualityMode.value,
+    split_allowed:splitAllowed.checked,
+    max_stores:Number(maxStores.value),
+    min_switch_saving_eur:Number(minSwitchSaving.value||3),
+    purchase_mode:purchaseMode.value,
+    travel_costs_eur:{},
+    delivery_costs_eur:{}
+  };
+  const r=await fetch("/api/optimize",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({stores,items:list,options})
+  });
+  const d=await r.json();
+  if(!r.ok){
+    optimizerResults.innerHTML=`<div class="result err">${esc(d.error||"Error")}</div>`;
+    return;
+  }
+  const o=d.optimizer||{};
+  let html="";
+  if(o.best_single_store){
+    html+=`<div class="result"><b>🏪 Mejor tienda única: ${esc(o.best_single_store.label)}</b><div class="price">${Number(o.best_single_store.real_total||o.best_single_store.total||0).toFixed(2).replace(".",",")} €</div></div>`;
+  }
+  if(o.best_split_basket){
+    html+=`<div class="result"><b>🧩 Mejor cesta dividida</b><div class="price">${Number(o.best_split_basket.real_total||0).toFixed(2).replace(".",",")} €</div><div class="small">Tiendas: ${esc((o.best_split_basket.stores_used||[]).join(", "))}</div>`;
+    html+=(o.best_split_basket.items||[]).map(x=>x.matched?`<div class="small">• ${esc(x.query)} → ${esc(x.label)} · ${esc(x.matched.name)} (${Number(x.line_total||0).toFixed(2).replace(".",",")} €)</div>`:`<div class="small">• ${esc(x.query)} → sin equivalente</div>`).join("");
+    html+="</div>";
+  }
+  html+=`<div class="result"><b>${o.recommended_plan==="split"?"✅ Recomendación: cesta dividida":"✅ Recomendación: tienda única"}</b><div class="small">${esc(o.reason||"")}</div>${o.saving_vs_single>0?`<div class="small">Ahorro frente a tienda única: ${Number(o.saving_vs_single).toFixed(2).replace(".",",")} €</div>`:""}</div>`;
+  optimizerResults.innerHTML=html;
+}
+
+</script>
 <script>
 let stream=null,detector=null,scanning=false,zxingReader=null,zxingControls=null;
 let list=[{query:"huevos 12 ud",qty:1},{query:"detergente 40 lavados",qty:1},{query:"papel higienico 12 rollos",qty:1},{query:"yogur natural 4 x 125 g",qty:1}];
@@ -169,4 +211,74 @@ function unitLabel(p){return p.functional_unit?.unit_label||"unidad normalizada"
 async function searchProduct(){searchResults.innerHTML="Buscando...";let r=await fetch(`/api/search?store=${encodeURIComponent(searchStore.value)}&q=${encodeURIComponent(q.value)}&ean=${encodeURIComponent(ean.value)}`);let d=await r.json();if(!r.ok){searchResults.innerHTML=`<div class="result err">${esc(d.error||"Error")}</div>`;return}searchResults.innerHTML=(d.products||[]).map(p=>`<div class="result"><b>${esc(p.name)}</b><div class="price">${Number(p.price).toFixed(2).replace(".",",")} €</div>${p.normalized_price!=null?`<span class="badge">${Number(p.normalized_price).toFixed(3).replace(".",",")} ${esc(unitLabel(p))}</span>`:""} ${p.exact_ean_match?`<span class="badge">EAN EXACTO</span>`:""} ${p.confidence?`<span class="badge">${p.confidence==="alta"?"ALTA":p.confidence==="probable"?"PROBABLE":"RECHAZADA"}</span>`:""} ${p.category?`<span class="badge">${esc(p.category)}</span>`:""} ${p.semantic_score!=null?`<span class="badge">similitud ${Math.round(p.semantic_score*100)}%</span>`:""} ${p.equivalent_units?.units_needed>1?`<div class="small">Equivalencia: ${p.equivalent_units.units_needed} unidades → ${Number(p.equivalent_cost).toFixed(2).replace(".",",")} €</div>`:""}</div>`).join("")||"<div class='result'>Sin equivalentes válidos.</div>"}
 async function compareBasket(){compareResults.innerHTML="Comparando...";let stores=[...document.querySelectorAll(".store input:checked")].map(x=>x.value);let r=await fetch("/api/compare",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({stores,items:list})});let d=await r.json();if(!r.ok){compareResults.innerHTML=`<div class="result err">${esc(d.error||"Error")}</div>`;return}compareResults.innerHTML=(d.results||[]).map((x,i)=>`<div class="result"><b>${i===0?"🏆 ":""}${esc(x.label)}</b><div class="price">${Number(x.total).toFixed(2).replace(".",",")} €</div><div class="small">${x.unresolved} líneas sin resolver</div>${(x.items||[]).map(y=>y.matched?`<div class="small">• ${esc(y.query)} → ${esc(y.matched.name)} (${Number(y.line_total).toFixed(2).replace(".",",")} €${y.units_needed>1?` · ${y.units_needed} unidades equivalentes`:""}${y.matched.normalized_price!=null?` · ${Number(y.matched.normalized_price).toFixed(3).replace(".",",")} ${esc(y.matched.functional_unit?.unit_label||"")}`:""} · ${esc((y.matched.confidence||"alta").toUpperCase())})</div>`:`<div class="small">• ${esc(y.query)} → sin equivalente</div>`).join("")}</div>`).join("")}
 render();
-</script></body></html>
+
+async function optimizeBasket(){
+  optimizerResults.innerHTML="Optimizando cesta...";
+  const stores=[...document.querySelectorAll(".store input:checked")].map(x=>x.value);
+  const options={
+    quality_mode:qualityMode.value,
+    split_allowed:splitAllowed.checked,
+    max_stores:Number(maxStores.value),
+    min_switch_saving_eur:Number(minSwitchSaving.value||3),
+    purchase_mode:purchaseMode.value,
+    travel_costs_eur:{},
+    delivery_costs_eur:{}
+  };
+  const r=await fetch("/api/optimize",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({stores,items:list,options})
+  });
+  const d=await r.json();
+  if(!r.ok){
+    optimizerResults.innerHTML=`<div class="result err">${esc(d.error||"Error")}</div>`;
+    return;
+  }
+  const o=d.optimizer||{};
+  let html="";
+  if(o.best_single_store){
+    html+=`<div class="result"><b>🏪 Mejor tienda única: ${esc(o.best_single_store.label)}</b><div class="price">${Number(o.best_single_store.real_total||o.best_single_store.total||0).toFixed(2).replace(".",",")} €</div></div>`;
+  }
+  if(o.best_split_basket){
+    html+=`<div class="result"><b>🧩 Mejor cesta dividida</b><div class="price">${Number(o.best_split_basket.real_total||0).toFixed(2).replace(".",",")} €</div><div class="small">Tiendas: ${esc((o.best_split_basket.stores_used||[]).join(", "))}</div>`;
+    html+=(o.best_split_basket.items||[]).map(x=>x.matched?`<div class="small">• ${esc(x.query)} → ${esc(x.label)} · ${esc(x.matched.name)} (${Number(x.line_total||0).toFixed(2).replace(".",",")} €)</div>`:`<div class="small">• ${esc(x.query)} → sin equivalente</div>`).join("");
+    html+="</div>";
+  }
+  html+=`<div class="result"><b>${o.recommended_plan==="split"?"✅ Recomendación: cesta dividida":"✅ Recomendación: tienda única"}</b><div class="small">${esc(o.reason||"")}</div>${o.saving_vs_single>0?`<div class="small">Ahorro frente a tienda única: ${Number(o.saving_vs_single).toFixed(2).replace(".",",")} €</div>`:""}</div>`;
+  optimizerResults.innerHTML=html;
+}
+
+</script>
+<div class="card">
+  <h2>Optimizador de cesta</h2>
+  <div class="small">Objetivo: <b>precio más bajo manteniendo la misma calidad</b>. Marca ignorada por defecto.</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
+    <label class="small">Calidad
+      <select id="qualityMode">
+        <option value="exact">Misma calidad exacta</option>
+        <option value="minimum">Calidad mínima aceptable</option>
+      </select>
+    </label>
+    <label class="small">Máx. tiendas
+      <select id="maxStores">
+        <option value="1">1 tienda</option>
+        <option value="2" selected>Hasta 2 tiendas</option>
+        <option value="3">Hasta 3 tiendas</option>
+      </select>
+    </label>
+    <label class="small">Ahorro mínimo para dividir (€)
+      <input id="minSwitchSaving" type="number" step="0.5" value="3">
+    </label>
+    <label class="small">Modo
+      <select id="purchaseMode">
+        <option value="physical">Compra física</option>
+        <option value="online">Compra online</option>
+      </select>
+    </label>
+  </div>
+  <label class="small" style="display:block;margin-top:8px"><input id="splitAllowed" type="checkbox" checked style="width:auto"> Permitir cesta dividida</label>
+  <button class="primary" style="width:100%;margin-top:10px" onclick="optimizeBasket()">Optimizar cesta</button>
+  <div id="optimizerResults"></div>
+</div>
+
+</body></html>
