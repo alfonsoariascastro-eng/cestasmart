@@ -364,9 +364,9 @@ def rank_candidate(query, requested_ean, p):
 
         qty_score=1.0
         if qf and pf and qf.get("amount") and pf.get("amount") and qf["kind"]==pf["kind"]:
-            feq=functional_equivalence(query,p["name"])
-            ratio=feq.get("ratio") or 0
-            if not feq.get("compatible"):
+            ratio=min(float(qf["amount"]),float(pf["amount"])) / max(float(qf["amount"]),float(pf["amount"]))
+            min_ratio=.90 if qf["kind"] in ("egg","roll","wash","sheet") else .80
+            if ratio < min_ratio:
                 # Detergent and toilet paper often differ by pack size; keep as probable
                 if qcat in ("detergente","lavavajillas","papel_higienico"):
                     score=72*sem_score + 18*ratio + 15
@@ -383,38 +383,17 @@ def rank_candidate(query, requested_ean, p):
     if qcat in fallback_categories:
         sim=token_similarity(query,p["name"])
         if qf:
-            feq=functional_equivalence(query,p["name"])
-            if not feq.get("compatible"):
-                return False,-40.0,feq.get("reason","unidad funcional incompatible"),sim,False,True,"rechazada"
+            if not pf:
+                return False,-40.0,"falta unidad funcional del producto",sim,False,True,"rechazada"
+            if qf["kind"] != pf["kind"]:
+                if not (qcat=="papel_higienico" and {qf["kind"],pf["kind"]} <= {"roll","sheet"}):
+                    return False,-40.0,"unidad funcional incompatible",sim,False,True,"rechazada"
         if sim >= 0.28:
             score=55*sim+20
             return True,score,"categoría correcta; coincidencia probable",sim,False,True,"probable"
 
     return False,-50.0,sem_reason,sem_score,False,True,"rechazada"
 
-
-def functional_tolerance(kind):
-    return {
-        "wash":0.20,"roll":0.35,"sheet":0.35,"egg":0.20,
-        "weight":0.15,"volume":0.15,"unit":0.20
-    }.get(kind,0.20)
-
-def functional_equivalence(query, product_name):
-    qf=parse_functional_unit(query)
-    pf=parse_functional_unit(product_name)
-    if not qf or not pf:
-        return {"compatible":False,"reason":"unidad funcional no legible"}
-    if qf["kind"]!=pf["kind"]:
-        if category(query)=="papel_higienico" and {qf["kind"],pf["kind"]}<={"roll","sheet"}:
-            return {"compatible":True,"probable":True,"ratio":None,"reason":"papel estructurado"}
-        return {"compatible":False,"reason":"unidad funcional distinta"}
-    qa=float(qf.get("amount") or 0); pa=float(pf.get("amount") or 0)
-    if qa<=0 or pa<=0:
-        return {"compatible":False,"reason":"cantidad funcional no legible"}
-    ratio=min(qa,pa)/max(qa,pa)
-    ok=ratio >= 1.0-functional_tolerance(qf["kind"])
-    return {"compatible":ok,"probable":ratio<0.95,"ratio":ratio,
-            "reason":"cantidad funcional compatible" if ok else "cantidad funcional demasiado distinta"}
 
 def units_needed_for_equivalence(query, product_name):
     """Return how many packs/units of candidate are needed to meet requested functional amount."""
@@ -693,6 +672,94 @@ def optimize_basket_plan(store_rows, items, options=None):
         "saving_vs_single":saving
     }
 
+
+def expanded_queries(query):
+    """
+    Category-aware query expansion. This is intentionally conservative:
+    it broadens vocabulary but keeps the same product category.
+    """
+    q=norm(query)
+    cat=category(query)
+    out=[query]
+
+    if cat=="detergente":
+        out += ["detergente lavadora", "detergente ropa", "detergente liquido lavadora", "detergente"]
+    elif cat=="papel_higienico":
+        out += ["papel higienico", "papel wc", "rollos papel higienico"]
+    elif cat=="huevos":
+        out += ["huevos frescos", "huevos", "huevos 12"]
+    elif cat=="yogur":
+        out += ["yogur natural", "yogur"]
+    elif cat=="leche":
+        out += ["leche entera", "leche"]
+    elif cat=="aceite_oliva":
+        if "virgen extra" in q or "aove" in q:
+            out += ["aceite oliva virgen extra", "aove"]
+        else:
+            out += ["aceite oliva"]
+
+    seen=set()
+    clean=[]
+    for x in out:
+        k=norm(x)
+        if k and k not in seen:
+            clean.append(x)
+            seen.add(k)
+    return clean
+
+def _is_hard_false_positive(query, product_name):
+    qcat=category(query)
+    n=norm(product_name)
+    toks=set(n.split())
+
+    if qcat=="huevos":
+        bad={"nido","nidos","pasta","fideo","fideos","tallarines","espagueti","espaguetis",
+             "macarron","macarrones","mayonesa","salsa","galleta","galletas","chocolate",
+             "chocolatina","golosina","golosinas","caramelo","caramelos","sorpresa","juguete"}
+        if toks & bad:
+            return True
+    if qcat=="detergente":
+        if toks & {"amoniaco","lejia","desengrasante","lavavajillas"}:
+            return True
+    if qcat=="papel_higienico":
+        if toks & {"humedo","humedos","toallita","toallitas","cocina"}:
+            return True
+    return False
+
+def _functional_match_relaxed(query, product_name):
+    qf=parse_functional_unit(query)
+    pf=parse_functional_unit(product_name)
+    if not qf:
+        return True, 1.0, "sin unidad funcional solicitada"
+    if not pf:
+        # For detergents/paper, allow a candidate without readable count only as PROBABLE,
+        # provided category/semantics are strong. This fixes catalogs that omit count in title.
+        if category(query) in ("detergente","papel_higienico"):
+            return True, 0.55, "cantidad no visible en nombre"
+        return False, 0.0, "unidad funcional no legible"
+    if qf["kind"] != pf["kind"]:
+        if category(query)=="papel_higienico" and {qf["kind"],pf["kind"]} <= {"roll","sheet"}:
+            return True, 0.65, "papel estructurado en otra unidad"
+        return False, 0.0, "unidad funcional distinta"
+
+    qa=float(qf.get("amount") or 0)
+    pa=float(pf.get("amount") or 0)
+    if qa<=0 or pa<=0:
+        return False,0.0,"cantidad funcional inválida"
+    ratio=min(qa,pa)/max(qa,pa)
+
+    min_ratio={
+        "wash":0.70,   # 40 can compare with roughly 28-57, normalized €/wash
+        "roll":0.50,   # 12 can compare with 6/8/9/16/18 using equivalent units
+        "sheet":0.50,
+        "egg":0.65,
+        "weight":0.80,
+        "volume":0.80,
+        "unit":0.70
+    }.get(qf["kind"],0.70)
+
+    return ratio>=min_ratio, ratio, "cantidad funcional compatible" if ratio>=min_ratio else "cantidad funcional demasiado distinta"
+
 class GroceryCLI:
     _resolved_keys={}
 
@@ -769,9 +836,9 @@ class GroceryCLI:
         found=[]
         def walk(x):
             if isinstance(x,dict):
-                name=x.get("name") or x.get("product_name") or x.get("title") or x.get("display_name") or x.get("label")
+                name=x.get("name") or x.get("product_name") or x.get("title") or x.get("display_name") or x.get("label") or x.get("productName")
                 price=None
-                for k in ("price","unit_price","price_eur","bulk_price","current_price","sale_price"):
+                for k in ("price","unit_price","price_eur","bulk_price","current_price","sale_price","final_price","amount"):
                     if k in x:
                         price=cls._price(x.get(k))
                         if price is not None:break
@@ -779,7 +846,7 @@ class GroceryCLI:
                     pi=x["price_instructions"]
                     price=cls._price(pi.get("unit_price") or pi.get("bulk_price"))
                 if name and price is not None:
-                    pid=x.get("id") or x.get("product_id") or x.get("pk") or x.get("sku")
+                    pid=x.get("id") or x.get("product_id") or x.get("pk") or x.get("sku") or x.get("code") or x.get("productId") or x.get("sku")
                     found.append({
                         "id":str(pid) if pid is not None else None,
                         "name":str(name),
@@ -824,35 +891,64 @@ class GroceryCLI:
     def diagnose_store(self,store):
         key="lidl-es" if store=="lidl" else (STORES.get(store) or {}).get("key")
         result={"store":store,"key":key}
-        try:
-            p=subprocess.run(["grocery","--store",key,"search","leche","--limit","3","--json"],
-                             text=True,capture_output=True,timeout=60)
-            result["search_ok"]=p.returncode==0
-            result["search_stdout"]=(p.stdout or "")[:1500]
-            result["search_stderr"]=(p.stderr or "")[:1500]
-        except Exception as e:
-            result["search_ok"]=False; result["search_error"]=str(e)
-        try:
-            p2=subprocess.run(["grocery","--store",key,"batch","-f","-","--candidates","5","--json"],
-                              input="leche\n",text=True,capture_output=True,timeout=60)
-            result["batch_ok"]=p2.returncode==0
-            result["batch_stdout"]=(p2.stdout or "")[:1500]
-            result["batch_stderr"]=(p2.stderr or "")[:1500]
-        except Exception as e:
-            result["batch_ok"]=False; result["batch_error"]=str(e)
+        for mode in ("search","batch"):
+            try:
+                if mode=="search":
+                    p=subprocess.run(
+                        ["grocery","--store",key,"search","leche","--limit","5","--json"],
+                        text=True,capture_output=True,timeout=60
+                    )
+                else:
+                    p=subprocess.run(
+                        ["grocery","--store",key,"batch","-f","-","--candidates","5","--json"],
+                        input="leche\n",text=True,capture_output=True,timeout=60
+                    )
+                result[mode+"_ok"]=p.returncode==0
+                result[mode+"_stdout"]=(p.stdout or "")[:2000]
+                result[mode+"_stderr"]=(p.stderr or "")[:2000]
+            except Exception as e:
+                result[mode+"_ok"]=False
+                result[mode+"_error"]=str(e)
         result["ok"]=bool(result.get("search_ok") or result.get("batch_ok"))
         return result
 
-    def _batch_candidates(self,store,query,limit=25):
-        cfg=STORES.get(store) or {}
-        key="lidl-es" if store=="lidl" else cfg.get("key")
-        if not key: return []
-        try:
-            data=self._run(["--store",key,"batch","-f","-","--candidates",str(limit),"--json"],
-                           stdin=query.strip()+"\n",timeout=120)
-            return self._collect_products(data)
-        except Exception:
+
+    def _raw_search(self,store,query,limit=40):
+        cfg=STORES.get(store)
+        if not cfg or not cfg.get("key"):
             return []
+        key="lidl-es" if store=="lidl" else cfg.get("key")
+        products=[]
+        # Standard search
+        try:
+            data=self._run(["--store",key,"search",query,"--limit",str(limit),"--json"])
+            products.extend(self._collect_products(data))
+        except Exception:
+            pass
+        # Batch candidate fallback
+        try:
+            data2=self._run(
+                ["--store",key,"batch","-f","-","--candidates","25","--json"],
+                stdin=query.strip()+"\n",
+                timeout=120
+            )
+            products.extend(self._collect_products(data2))
+        except Exception:
+            pass
+
+        uniq={}
+        for p in products:
+            uniq[(p.get("id"),p.get("name"),p.get("price"))]=p
+        return list(uniq.values())
+
+    def _multiquery_products(self,store,query):
+        products=[]
+        for q2 in expanded_queries(query):
+            products.extend(self._raw_search(store,q2,40))
+        uniq={}
+        for p in products:
+            uniq[(p.get("id"),p.get("name"),p.get("price"))]=p
+        return list(uniq.values())
 
     def search(self,store,query,limit=8,ean=None):
         cfg=STORES.get(store)
@@ -861,11 +957,7 @@ class GroceryCLI:
 
         requested_ean=normalize_ean(ean)
         search_term=query
-        store_key=("lidl-es" if store=="lidl" else self._store_key(store))
-        data=self._run(["--store",store_key,"search",search_term,"--limit","40","--json"])
-        products=self._collect_products(data)
-        if not products:
-            products=self._batch_candidates(store,query,limit=25)
+        products=self._multiquery_products(store,query)
 
         valid=[]
         rejected=[]
@@ -909,6 +1001,61 @@ class GroceryCLI:
         # CestaSmart core rule:
         # 1) exact EAN only when explicitly requested,
         # 2) otherwise cheapest valid same-quality comparable product wins.
+
+        # RELAXED_CATEGORY_FALLBACK
+        # If strict matching leaves nothing, use category-safe candidates from expanded queries.
+        # Hard false positives remain excluded.
+        if not valid:
+            for p in products:
+                pname=p.get("name") or ""
+                if not pname or _is_hard_false_positive(query,pname):
+                    continue
+                if category(query) != category(pname):
+                    continue
+
+                sem=token_similarity(query,pname)
+                # Broad query expansions can lower token overlap. Require enough relevance.
+                if sem < 0.20:
+                    continue
+
+                fm_ok,fm_ratio,fm_reason=_functional_match_relaxed(query,pname)
+                if not fm_ok:
+                    continue
+
+                # Respect same-quality logic when available.
+                try:
+                    quality_ok,quality_tier=same_quality(query,pname)
+                    if not quality_ok:
+                        continue
+                    p["quality_tier"]=quality_tier
+                except Exception:
+                    pass
+
+                fu=parse_functional_unit(pname)
+                p["functional_unit"]=fu
+                try:
+                    p["offer"]=offer_info(p)
+                    effective=(p["offer"].get("effective_price") or p.get("price"))
+                except Exception:
+                    effective=p.get("price")
+                p["normalized_price"]=normalized_price(effective,fu)
+                p["semantic_score"]=round(float(sem),3)
+                p["confidence"]="probable" if fm_ratio < 0.85 else "alta"
+                p["match_reason"]="equivalencia ampliada por categoría"
+                p["exact_ean_match"]=False
+                p["category_match"]=True
+                p["rank_score"]=round(60*float(sem)+30*float(fm_ratio),3)
+                p["selection_policy"]="precio_mas_bajo_misma_calidad"
+                p["brand_ignored_by_default"]=True
+
+                eq=units_needed_for_equivalence(query,pname)
+                p["equivalent_units"]=eq
+                if eq and effective is not None:
+                    p["equivalent_cost"]=round(float(effective)*int(eq.get("units_needed") or 1),2)
+                else:
+                    p["equivalent_cost"]=effective
+                valid.append(p)
+
         valid.sort(key=lambda p:(
             0 if p.get("exact_ean_match",False) else 1,
             p["normalized_price"] is None,

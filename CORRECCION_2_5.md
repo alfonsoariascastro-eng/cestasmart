@@ -1,4 +1,4 @@
-# CestaSmart 2.5
+# CestaSmart 2.7
 - Mercadona: rechaza nidos/pasta/fideos al huevo y otros derivados.
 - Para huevos exige contexto real de venta (12 ud, frescos, camperos, calibre, etc.).
 - Lidl: fuerza la clave oficial `lidl-es`.

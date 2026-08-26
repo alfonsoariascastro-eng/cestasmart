@@ -1,4 +1,4 @@
-# CestaSmart 2.4 — Optimizador de cesta
+# CestaSmart 2.7 — Optimizador de cesta
 
 Objetivo central:
 **obtener la cesta más económica posible manteniendo la misma calidad, independientemente de la marca.**
