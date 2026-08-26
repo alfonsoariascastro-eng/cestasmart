@@ -396,29 +396,32 @@ def rank_candidate(query, requested_ean, p):
 
 
 def units_needed_for_equivalence(query, product_name):
-    """Return how many packs/units of candidate are needed to meet requested functional amount."""
+    import math
     qf=parse_functional_unit(query)
     pf=parse_functional_unit(product_name)
-    if not qf or not pf:
+    if not qf or not pf or qf["kind"] != pf["kind"]:
         return None
-    if qf["kind"] != pf["kind"]:
-        return None
+
     qa=float(qf.get("amount") or 0)
     pa=float(pf.get("amount") or 0)
-    if qa <= 0 or pa <= 0:
+    if qa<=0 or pa<=0:
         return None
-    import math
-    units=1 if pa >= qa * 0.90 else max(1, math.ceil(qa/pa))
+
+    # Si el candidato cubre al menos el 90% de la cantidad pedida,
+    # lo tratamos como un solo pack equivalente.
+    units=1 if pa >= qa*0.90 else max(1, math.ceil(qa/pa))
     covered=units*pa
-    ratio=covered/qa if qa else None
+
     return {
-        "units_needed": units,
-        "requested_amount": qa,
-        "candidate_amount": pa,
-        "covered_amount": covered,
-        "coverage_ratio": ratio,
-        "kind": qf["kind"],
-        "unit_label": qf.get("unit_label")
+        "units_needed":units,
+        "requested_amount":qa,
+        "candidate_amount":pa,
+        "covered_amount":covered,
+        "excess_amount":max(0.0,covered-qa),
+        "coverage_ratio":covered/qa if qa else None,
+        "kind":qf["kind"],
+        "unit_label":qf.get("unit_label"),
+        "mode":"equivalent_packs" if units>1 else "direct"
     }
 
 
@@ -722,43 +725,30 @@ def _is_hard_false_positive(query, product_name):
         if toks & {"amoniaco","lejia","desengrasante","lavavajillas"}:
             return True
     if qcat=="papel_higienico":
-        if toks & {"humedo","humedos","toallita","toallitas","cocina"}:
+        if toks & {"humedo","humedos","toallita","toallitas","cocina","portarrollos","organizador","escobilla","toallero","soporte","accesorio","accesorios","panuelos","pañuelos"}:
             return True
     return False
 
 def _functional_match_relaxed(query, product_name):
     qf=parse_functional_unit(query)
     pf=parse_functional_unit(product_name)
+
     if not qf:
-        return True, 1.0, "sin unidad funcional solicitada"
+        return True,1.0,"sin unidad funcional solicitada"
     if not pf:
-        # For detergents/paper, allow a candidate without readable count only as PROBABLE,
-        # provided category/semantics are strong. This fixes catalogs that omit count in title.
         if category(query) in ("detergente","papel_higienico"):
-            return True, 0.55, "cantidad no visible en nombre"
-        return False, 0.0, "unidad funcional no legible"
+            return True,0.50,"cantidad no visible en nombre"
+        return False,0.0,"unidad funcional no legible"
     if qf["kind"] != pf["kind"]:
-        if category(query)=="papel_higienico" and {qf["kind"],pf["kind"]} <= {"roll","sheet"}:
-            return True, 0.65, "papel estructurado en otra unidad"
-        return False, 0.0, "unidad funcional distinta"
+        return False,0.0,"unidad funcional distinta"
 
     qa=float(qf.get("amount") or 0)
     pa=float(pf.get("amount") or 0)
     if qa<=0 or pa<=0:
         return False,0.0,"cantidad funcional inválida"
+
     ratio=min(qa,pa)/max(qa,pa)
-
-    min_ratio={
-        "wash":0.70,   # 40 can compare with roughly 28-57, normalized €/wash
-        "roll":0.50,   # 12 can compare with 6/8/9/16/18 using equivalent units
-        "sheet":0.50,
-        "egg":0.65,
-        "weight":0.80,
-        "volume":0.80,
-        "unit":0.70
-    }.get(qf["kind"],0.70)
-
-    return ratio>=min_ratio, ratio, "cantidad funcional compatible" if ratio>=min_ratio else "cantidad funcional demasiado distinta"
+    return True,ratio,"convertible por packs equivalentes"
 
 class GroceryCLI:
     _resolved_keys={}
