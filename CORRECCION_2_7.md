@@ -1,4 +1,4 @@
-# CestaSmart 2.7 — multi-query + equivalencias ampliadas
+# CestaSmart 2.9 — multi-query + equivalencias ampliadas
 
 ## Mercadona
 Cada producto se busca con varias expresiones de la misma categoría:

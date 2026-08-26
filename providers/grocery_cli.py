@@ -695,6 +695,13 @@ def expanded_queries(query):
         out += ["yogur natural", "yogur"]
     elif cat=="leche":
         out += ["leche entera", "leche"]
+    elif "cafe" in q:
+        if "natural" in q: out += ["cafe molido natural", "cafe natural molido", "cafe molido"]
+        else: out += ["cafe"]
+    elif any(x in q for x in ["spaguetti","spaghetti","espagueti","espaguetis"]):
+        out += ["spaghetti", "spaguetti", "espaguetis", "pasta spaghetti"]
+    elif "queso" in q and "manchego" in q:
+        out += ["queso manchego", "queso manchego curado", "queso manchego semicurado", "DOP manchego"]
     elif cat=="aceite_oliva":
         if "virgen extra" in q or "aove" in q:
             out += ["aceite oliva virgen extra", "aove"]
@@ -711,23 +718,14 @@ def expanded_queries(query):
     return clean
 
 def _is_hard_false_positive(query, product_name):
-    qcat=category(query)
-    n=norm(product_name)
-    toks=set(n.split())
-
-    if qcat=="huevos":
-        bad={"nido","nidos","pasta","fideo","fideos","tallarines","espagueti","espaguetis",
-             "macarron","macarrones","mayonesa","salsa","galleta","galletas","chocolate",
-             "chocolatina","golosina","golosinas","caramelo","caramelos","sorpresa","juguete"}
-        if toks & bad:
-            return True
-    if qcat=="detergente":
-        if toks & {"amoniaco","lejia","desengrasante","lavavajillas"}:
-            return True
-    if qcat=="papel_higienico":
-        if toks & {"humedo","humedos","toallita","toallitas","cocina","portarrollos","organizador","escobilla","toallero","soporte","accesorio","accesorios","panuelos","pañuelos"}:
-            return True
+    q=norm(query); toks=set(norm(product_name).split())
+    if ("huevo" in q or "huevos" in q) and toks & {"nido","nidos","pasta","fideo","fideos","tallarines","espagueti","espaguetis","macarron","macarrones","mayonesa","salsa","galleta","galletas","chocolate","chocolatina","golosina","golosinas","caramelo","caramelos","sorpresa","juguete"}: return True
+    if "detergente" in q and (toks & {"amoniaco","lejia","desengrasante","lavavajillas"} or ("lavados" in q and "mano" in toks)): return True
+    if "papel" in q and "higien" in q and toks & {"humedo","humedos","toallita","toallitas","cocina","portarrollos","organizador","escobilla","toallero","soporte","accesorio","accesorios","panuelos","pañuelos"}: return True
+    if "cafe" in q and "natural" in q and toks & {"soluble","sobres","capsula","capsulas"}: return True
+    if "queso" in q and "manchego" in q and toks & {"untar","crema","rallado","loncha","lonchas"}: return True
     return False
+
 
 def _functional_match_relaxed(query, product_name):
     qf=parse_functional_unit(query)
@@ -749,6 +747,44 @@ def _functional_match_relaxed(query, product_name):
 
     ratio=min(qa,pa)/max(qa,pa)
     return True,ratio,"convertible por packs equivalentes"
+
+
+def product_subtype(name):
+    n=norm(name)
+    toks=set(n.split())
+    cat=category(name)
+    if cat=="cafe":
+        if "soluble" in toks or "sobres" in toks: return "cafe_soluble"
+        if "capsula" in toks or "capsulas" in toks: return "cafe_capsulas"
+        if "grano" in toks: return "cafe_grano"
+        if "molido" in toks or "natural" in toks: return "cafe_molido"
+        return "cafe_general"
+    if any(x in toks for x in {"spaguetti","spaghetti","espagueti","espaguetis"}): return "pasta_spaghetti"
+    if "queso" in toks:
+        if "manchego" in toks or "dop" in toks: return "queso_manchego"
+        if "untar" in toks or "crema" in toks: return "queso_untar"
+        if "rallado" in toks: return "queso_rallado"
+        if "loncha" in toks or "lonchas" in toks: return "queso_lonchas"
+        return "queso_general"
+    if cat=="papel_higienico":
+        if toks & {"humedo","humedos","toallita","toallitas"}: return "papel_humedo"
+        if toks & {"portarrollos","organizador","escobilla","toallero","soporte","accesorio","accesorios"}: return "accesorio_bano"
+        return "papel_rollos"
+    if cat=="detergente":
+        if "mano" in toks: return "detergente_mano"
+        if toks & {"lavadora","lavados","ropa"}: return "detergente_lavadora"
+        return "detergente_general"
+    return cat
+
+def subtype_compatible(query, product_name):
+    q=norm(query)
+    ps=product_subtype(product_name)
+    if "cafe" in q and "natural" in q: return ps in ("cafe_molido","cafe_grano","cafe_general")
+    if any(x in q for x in ["spaguetti","spaghetti","espagueti","espaguetis"]): return ps=="pasta_spaghetti"
+    if "queso" in q and "manchego" in q: return ps=="queso_manchego"
+    if "papel" in q and "higien" in q: return ps=="papel_rollos"
+    if "detergente" in q and "lavados" in q: return ps!="detergente_mano"
+    return True
 
 class GroceryCLI:
     _resolved_keys={}
@@ -962,6 +998,10 @@ class GroceryCLI:
                 rejected.append({"name":p["name"],"reason":reason,"category":p.get("category")})
                 continue
 
+            if not subtype_compatible(query,p["name"]):
+                rejected.append({"name":p["name"],"reason":"subtipo incompatible","category":p.get("category")})
+                continue
+
             quality_ok,quality_tier=same_quality(query,p["name"])
             if not quality_ok:
                 rejected.append({"name":p["name"],"reason":quality_tier,"category":p.get("category")})
@@ -1001,6 +1041,8 @@ class GroceryCLI:
                 if not pname or _is_hard_false_positive(query,pname):
                     continue
                 if category(query) != category(pname):
+                    continue
+                if not subtype_compatible(query,pname):
                     continue
 
                 sem=token_similarity(query,pname)

@@ -1,4 +1,4 @@
-# CestaSmart 2.8 — equivalencia por packs
+# CestaSmart 2.9 — equivalencia por packs
 
 Regla principal:
 - Si el pack no coincide, se calcula cuántos packs del candidato hacen falta.
