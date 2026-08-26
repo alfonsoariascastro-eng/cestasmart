@@ -364,9 +364,9 @@ def rank_candidate(query, requested_ean, p):
 
         qty_score=1.0
         if qf and pf and qf.get("amount") and pf.get("amount") and qf["kind"]==pf["kind"]:
-            ratio=min(float(qf["amount"]),float(pf["amount"])) / max(float(qf["amount"]),float(pf["amount"]))
-            min_ratio=.90 if qf["kind"] in ("egg","roll","wash","sheet") else .80
-            if ratio < min_ratio:
+            feq=functional_equivalence(query,p["name"])
+            ratio=feq.get("ratio") or 0
+            if not feq.get("compatible"):
                 # Detergent and toilet paper often differ by pack size; keep as probable
                 if qcat in ("detergente","lavavajillas","papel_higienico"):
                     score=72*sem_score + 18*ratio + 15
@@ -383,17 +383,38 @@ def rank_candidate(query, requested_ean, p):
     if qcat in fallback_categories:
         sim=token_similarity(query,p["name"])
         if qf:
-            if not pf:
-                return False,-40.0,"falta unidad funcional del producto",sim,False,True,"rechazada"
-            if qf["kind"] != pf["kind"]:
-                if not (qcat=="papel_higienico" and {qf["kind"],pf["kind"]} <= {"roll","sheet"}):
-                    return False,-40.0,"unidad funcional incompatible",sim,False,True,"rechazada"
+            feq=functional_equivalence(query,p["name"])
+            if not feq.get("compatible"):
+                return False,-40.0,feq.get("reason","unidad funcional incompatible"),sim,False,True,"rechazada"
         if sim >= 0.28:
             score=55*sim+20
             return True,score,"categoría correcta; coincidencia probable",sim,False,True,"probable"
 
     return False,-50.0,sem_reason,sem_score,False,True,"rechazada"
 
+
+def functional_tolerance(kind):
+    return {
+        "wash":0.20,"roll":0.35,"sheet":0.35,"egg":0.20,
+        "weight":0.15,"volume":0.15,"unit":0.20
+    }.get(kind,0.20)
+
+def functional_equivalence(query, product_name):
+    qf=parse_functional_unit(query)
+    pf=parse_functional_unit(product_name)
+    if not qf or not pf:
+        return {"compatible":False,"reason":"unidad funcional no legible"}
+    if qf["kind"]!=pf["kind"]:
+        if category(query)=="papel_higienico" and {qf["kind"],pf["kind"]}<={"roll","sheet"}:
+            return {"compatible":True,"probable":True,"ratio":None,"reason":"papel estructurado"}
+        return {"compatible":False,"reason":"unidad funcional distinta"}
+    qa=float(qf.get("amount") or 0); pa=float(pf.get("amount") or 0)
+    if qa<=0 or pa<=0:
+        return {"compatible":False,"reason":"cantidad funcional no legible"}
+    ratio=min(qa,pa)/max(qa,pa)
+    ok=ratio >= 1.0-functional_tolerance(qf["kind"])
+    return {"compatible":ok,"probable":ratio<0.95,"ratio":ratio,
+            "reason":"cantidad funcional compatible" if ok else "cantidad funcional demasiado distinta"}
 
 def units_needed_for_equivalence(query, product_name):
     """Return how many packs/units of candidate are needed to meet requested functional amount."""
@@ -748,9 +769,9 @@ class GroceryCLI:
         found=[]
         def walk(x):
             if isinstance(x,dict):
-                name=x.get("name") or x.get("product_name") or x.get("title")
+                name=x.get("name") or x.get("product_name") or x.get("title") or x.get("display_name") or x.get("label")
                 price=None
-                for k in ("price","unit_price","price_eur","bulk_price"):
+                for k in ("price","unit_price","price_eur","bulk_price","current_price","sale_price"):
                     if k in x:
                         price=cls._price(x.get(k))
                         if price is not None:break
@@ -802,13 +823,36 @@ class GroceryCLI:
 
     def diagnose_store(self,store):
         key="lidl-es" if store=="lidl" else (STORES.get(store) or {}).get("key")
+        result={"store":store,"key":key}
         try:
-            p=subprocess.run(["grocery","--store",key,"search","leche","--limit","1","--json"],
+            p=subprocess.run(["grocery","--store",key,"search","leche","--limit","3","--json"],
                              text=True,capture_output=True,timeout=60)
-            return {"store":store,"key":key,"ok":p.returncode==0,
-                    "stdout":(p.stdout or "")[:500],"stderr":(p.stderr or "")[:500]}
+            result["search_ok"]=p.returncode==0
+            result["search_stdout"]=(p.stdout or "")[:1500]
+            result["search_stderr"]=(p.stderr or "")[:1500]
         except Exception as e:
-            return {"store":store,"key":key,"ok":False,"error":str(e)}
+            result["search_ok"]=False; result["search_error"]=str(e)
+        try:
+            p2=subprocess.run(["grocery","--store",key,"batch","-f","-","--candidates","5","--json"],
+                              input="leche\n",text=True,capture_output=True,timeout=60)
+            result["batch_ok"]=p2.returncode==0
+            result["batch_stdout"]=(p2.stdout or "")[:1500]
+            result["batch_stderr"]=(p2.stderr or "")[:1500]
+        except Exception as e:
+            result["batch_ok"]=False; result["batch_error"]=str(e)
+        result["ok"]=bool(result.get("search_ok") or result.get("batch_ok"))
+        return result
+
+    def _batch_candidates(self,store,query,limit=25):
+        cfg=STORES.get(store) or {}
+        key="lidl-es" if store=="lidl" else cfg.get("key")
+        if not key: return []
+        try:
+            data=self._run(["--store",key,"batch","-f","-","--candidates",str(limit),"--json"],
+                           stdin=query.strip()+"\n",timeout=120)
+            return self._collect_products(data)
+        except Exception:
+            return []
 
     def search(self,store,query,limit=8,ean=None):
         cfg=STORES.get(store)
@@ -820,6 +864,8 @@ class GroceryCLI:
         store_key=("lidl-es" if store=="lidl" else self._store_key(store))
         data=self._run(["--store",store_key,"search",search_term,"--limit","40","--json"])
         products=self._collect_products(data)
+        if not products:
+            products=self._batch_candidates(store,query,limit=25)
 
         valid=[]
         rejected=[]
