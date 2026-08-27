@@ -12,7 +12,7 @@ STORES = {
     "gadis": {"label":"Gadis","key":"gadis","aliases":["gadis"]},
     "dia": {"label":"DIA","key":"dia","aliases":["dia"]},
     "lidl": {"label":"Lidl","key":"lidl-es","aliases":["lidl-es"]},
-    "carrefour": {"label":"Carrefour","key":None},,
+    "carrefour": {"label":"Carrefour","key":None},
     "eroski":{"label":"Eroski","key":"eroski","aliases":["eroski"]}
 }
 
