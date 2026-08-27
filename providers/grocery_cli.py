@@ -941,6 +941,192 @@ def store_availability_status(store):
         return {"available":False,"status":"CONNECTOR_PENDING","message":"Familia: conector de precios específico no disponible; se omite para no mezclar precios con Eroski."}
     return {"available":True,"status":"REAL_BETA"}
 
+
+def detergent_form_compatible(query, product_name):
+    q=norm(query)
+    p=norm(product_name)
+    qt=set(q.split())
+    pt=set(p.split())
+
+    if "detergente" not in qt:
+        return True,"no aplica"
+
+    if "polvo" in qt:
+        return ("polvo" in pt, "se requiere detergente en polvo")
+    if qt & {"capsula","capsulas","pastillas","tabletas"}:
+        return (bool(pt & {"capsula","capsulas","pastillas","tabletas"}), "se requieren cápsulas/pastillas")
+    if "mano" in qt:
+        return ("mano" in pt, "se requiere lavado a mano")
+
+    # Si no se especifica formato, el estándar será líquido de lavadora.
+    if pt & {"polvo","capsula","capsulas","pastillas","tabletas","mano"}:
+        return False,"formato distinto al estándar líquido"
+
+    # Evitar variantes especializadas salvo petición.
+    specials = {
+        "delicadas":{"delicada","delicadas","delicado","delicados"},
+        "oscura":{"oscura","oscuras","negra","negras"},
+        "bebe":{"bebe","bebé","infantil"},
+    }
+    for _,terms in specials.items():
+        if pt & terms and not (qt & terms):
+            return False,"variante especializada no solicitada"
+
+    return True,"formato líquido compatible"
+
+def _extract_eroski_package_price(block):
+    if not block:
+        return None
+    b=block.replace("\xa0"," ")
+    b=re.sub(r"\b1\s+(?:DOSIS|UNIDAD|ROLLO|KG|KILO|L|LITRO|100\s*G|100\s*ML)\s+A\s+\d+[,.]\d+\s*€"," ",b,flags=re.I)
+    vals=[]
+    for m in re.finditer(r"(?<![\d])(\d{1,3}[,.]\d{2})\s*€",b):
+        try:
+            vals.append(float(m.group(1).replace(",", ".")))
+        except:
+            pass
+    return vals[0] if vals else None
+
+
+def sanitize_eroski_product(product):
+    if not isinstance(product,dict):
+        return product
+    src=norm(str(product.get("source") or product.get("provider") or ""))
+    if "eroski" not in src:
+        return product
+
+    raw=product.get("_raw_text") or product.get("raw_text") or product.get("html_block") or ""
+    if raw:
+        b=raw.replace("\xa0"," ")
+        vals=[]
+        for m in re.finditer(r"(?<![\d])(\d{1,3}[,.]\d{2})\s*€",b):
+            try:
+                vals.append(float(m.group(1).replace(",",".")))
+            except:
+                pass
+        # For Eroski blocks the smallest amount is often €/dose or €/roll.
+        # A package price should be materially larger; prefer the largest sensible amount.
+        sensible=[v for v in vals if 0.50 <= v <= 100.0]
+        if sensible:
+            full=max(sensible)
+            product["price"]=full
+            product["package_price"]=full
+    return product
+
+
+
+def package_price_integrity(query, product):
+    """
+    Reject prices that are almost certainly unit prices being mistaken for package prices.
+    We prefer returning 'sin equivalente' over contaminating the basket total.
+    """
+    if not isinstance(product,dict):
+        return False,"producto inválido"
+
+    price=product.get("package_price")
+    if price is None:
+        price=product.get("price")
+    try:
+        price=float(price)
+    except:
+        return False,"precio no válido"
+
+    if price<=0:
+        return False,"precio no válido"
+
+    qf=parse_functional_unit(query)
+    pf=parse_functional_unit(product.get("name") or "")
+
+    # Absolute sanity floors only for clear multipacks/functional units.
+    if qf:
+        kind=qf.get("kind")
+        qa=float(qf.get("amount") or 0)
+        # These floors are intentionally conservative and only catch
+        # unit prices masquerading as full-package prices.
+        if kind=="wash" and qa>=20 and price<0.75:
+            return False,"parece precio por lavado, no del envase"
+        if kind=="roll" and qa>=6 and price<0.75:
+            return False,"parece precio por rollo, no del paquete"
+        if kind=="egg" and qa>=6 and price<1.00:
+            return False,"parece precio unitario, no de la docena/pack"
+        if kind=="weight" and qa>=0.4 and price<0.30:
+            return False,"precio de envase inverosímil"
+        if kind=="volume" and qa>=0.5 and price<0.30:
+            return False,"precio de envase inverosímil"
+
+    return True,"precio de envase plausible"
+
+def equivalence_integrity(query, product):
+    """
+    A candidate must preserve category, subtype/variant and comparable quantity.
+    """
+    name=(product or {}).get("name") or ""
+    if not name:
+        return False,"sin nombre"
+
+    # Hard semantic false positives.
+    try:
+        if _is_hard_false_positive(query,name):
+            return False,"falso positivo semántico"
+    except Exception:
+        pass
+
+    try:
+        ok,reason=generic_variant_compatible(query,name)
+        if not ok:
+            return False,reason
+    except Exception:
+        pass
+
+    try:
+        ok,reason=detergent_form_compatible(query,name)
+        if not ok:
+            return False,reason
+    except Exception:
+        pass
+
+    # Quantity must be either directly comparable or convertible by packs.
+    qf=parse_functional_unit(query)
+    if qf:
+        pf=parse_functional_unit(name)
+        if pf and qf.get("kind")==pf.get("kind"):
+            eq=units_needed_for_equivalence(query,name)
+            if eq is None:
+                return False,"cantidad no comparable"
+        elif category(query) not in ("detergente","papel_higienico"):
+            return False,"cantidad/formato no comparable"
+
+    return True,"equivalencia válida"
+
+def comparable_line_total(query, product, requested_qty=1):
+    """
+    Return total cost for the requested equivalent quantity.
+    Always starts from package price, never from normalized €/unit.
+    """
+    ok,reason=package_price_integrity(query,product)
+    if not ok:
+        return None,reason
+
+    ok,reason2=equivalence_integrity(query,product)
+    if not ok:
+        return None,reason2
+
+    base=product.get("package_price")
+    if base is None:
+        base=((product.get("offer") or {}).get("effective_price"))
+    if base is None:
+        base=product.get("price")
+
+    try:
+        base=float(base)
+    except:
+        return None,"precio no válido"
+
+    eq=units_needed_for_equivalence(query,product.get("name") or "") or {}
+    packs=max(1,int(eq.get("units_needed") or 1))
+    total=base*packs*max(1,int(requested_qty or 1))
+    return round(total,2),"coste equivalente"
+
 class GroceryCLI:
     _resolved_keys={}
 
@@ -1205,6 +1391,11 @@ class GroceryCLI:
                 continue
 
             variant_ok,variant_reason=generic_variant_compatible(query,p["name"])
+            if variant_ok:
+                form_ok,form_reason=detergent_form_compatible(query,p["name"])
+                if not form_ok:
+                    variant_ok=False
+                    variant_reason=form_reason
             if not variant_ok:
                 rejected.append({"name":p["name"],"reason":variant_reason,"category":p.get("category")})
                 continue
@@ -1232,7 +1423,11 @@ class GroceryCLI:
             else:
                 p["equivalent_cost"]=None
 
-            valid.append(p)
+            price_ok,price_reason=package_price_integrity(query,p)
+                eq_ok,eq_reason=equivalence_integrity(query,p)
+                if not price_ok or not eq_ok:
+                    continue
+                valid.append(p)
 
         # Brand is ignored. Among valid same-quality candidates, cheapest comparable cost wins.
         # CestaSmart core rule:
@@ -1250,6 +1445,11 @@ class GroceryCLI:
                 if category(query) != category(pname):
                     continue
                 variant_ok,variant_reason=generic_variant_compatible(query,pname)
+                if variant_ok:
+                    form_ok,form_reason=detergent_form_compatible(query,pname)
+                    if not form_ok:
+                        variant_ok=False
+                        variant_reason=form_reason
                 if not variant_ok:
                     continue
                 if not subtype_compatible(query,pname):
@@ -1349,7 +1549,11 @@ class GroceryCLI:
                     units_needed=max(1,int(eq["units_needed"]))
 
                 base_price=((best.get("offer") or {}).get("effective_price")) or best["price"]
-                line=base_price*units_needed*qty
+                line,_reason=comparable_line_total(q,best,qty)
+                if line is None:
+                    unresolved+=1
+                    detail.append({"query":q,"qty":qty,"matched":None,"reason":_reason})
+                    continue
                 total+=line
                 detail.append({
                     "query":q,

@@ -27,7 +27,7 @@
   "familia": {
     "enabled": false,
     "provider": "custom",
-    "status": "pending"
+    "status": "connector_unavailable"
   },
   "carrefour": {
     "enabled": false,
