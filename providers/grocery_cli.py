@@ -1424,10 +1424,10 @@ class GroceryCLI:
                 p["equivalent_cost"]=None
 
             price_ok,price_reason=package_price_integrity(query,p)
-                eq_ok,eq_reason=equivalence_integrity(query,p)
-                if not price_ok or not eq_ok:
-                    continue
-                valid.append(p)
+            eq_ok,eq_reason=equivalence_integrity(query,p)
+            if not price_ok or not eq_ok:
+                continue
+            valid.append(p)
 
         # Brand is ignored. Among valid same-quality candidates, cheapest comparable cost wins.
         # CestaSmart core rule:
