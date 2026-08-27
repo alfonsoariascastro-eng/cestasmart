@@ -786,6 +786,58 @@ def subtype_compatible(query, product_name):
     if "detergente" in q and "lavados" in q: return ps!="detergente_mano"
     return True
 
+
+def generic_variant_compatible(query, product_name):
+    q=norm(query)
+    p=norm(product_name)
+    qt=set(q.split())
+    pt=set(p.split())
+
+    # CAFÉ genérico: no cápsulas, soluble, sabores o descafeinado salvo petición.
+    if "cafe" in qt:
+        if not ({"capsula","capsulas"} & qt) and ({"capsula","capsulas"} & pt):
+            return False,"cápsulas no solicitadas"
+        if "soluble" not in qt and "soluble" in pt:
+            return False,"café soluble no solicitado"
+        if "descafeinado" not in qt and "descafeinado" in pt:
+            return False,"descafeinado no solicitado"
+        sabores={"caramel","caramelo","vainilla","avellana","chocolate"}
+        if not (qt & sabores) and (pt & sabores):
+            return False,"sabor añadido no solicitado"
+
+    # SALSA DE TOMATE genérica: no variantes especiales salvo petición.
+    if "salsa" in qt and "tomate" in qt:
+        special={"arrabbiata","albahaca","picante","bolonesa","boloñesa","bolognesa","queso","trufa","pesto"}
+        if not (qt & special) and (pt & special):
+            return False,"variante de salsa no solicitada"
+
+    # GEL DE BAÑO / DUCHA genérico.
+    if "gel" in qt and ({"bano","baño","ducha"} & qt):
+        special={"exfoliante","intimo","íntimo","medicado","antibacteriano","dermatitis"}
+        if not (qt & special) and (pt & special):
+            return False,"gel especializado no solicitado"
+
+    # JAMÓN COCIDO debe seguir siendo jamón cocido de cerdo.
+    if "jamon" in qt and "cocido" in qt:
+        if "pavo" in pt or "pollo" in pt:
+            return False,"producto de ave no solicitado"
+        if "serrano" in pt or "iberico" in pt or "ibérico" in pt:
+            return False,"tipo de jamón distinto"
+
+    # YOGUR NATURAL genérico.
+    if "yogur" in qt and "natural" in qt:
+        sabores={"fresa","limon","limón","vainilla","coco","frutos","arandanos","arándanos","melocoton","melocotón"}
+        if not (qt & sabores) and (pt & sabores):
+            return False,"sabor de yogur no solicitado"
+
+    # LECHE genérica.
+    if "leche" in qt:
+        sabores={"chocolate","cacao","vainilla","fresa"}
+        if not (qt & sabores) and (pt & sabores):
+            return False,"leche saborizada no solicitada"
+
+    return True,"variante compatible"
+
 class GroceryCLI:
     _resolved_keys={}
 
@@ -1002,6 +1054,11 @@ class GroceryCLI:
                 rejected.append({"name":p["name"],"reason":"subtipo incompatible","category":p.get("category")})
                 continue
 
+            variant_ok,variant_reason=generic_variant_compatible(query,p["name"])
+            if not variant_ok:
+                rejected.append({"name":p["name"],"reason":variant_reason,"category":p.get("category")})
+                continue
+
             quality_ok,quality_tier=same_quality(query,p["name"])
             if not quality_ok:
                 rejected.append({"name":p["name"],"reason":quality_tier,"category":p.get("category")})
@@ -1041,6 +1098,9 @@ class GroceryCLI:
                 if not pname or _is_hard_false_positive(query,pname):
                     continue
                 if category(query) != category(pname):
+                    continue
+                variant_ok,variant_reason=generic_variant_compatible(query,pname)
+                if not variant_ok:
                     continue
                 if not subtype_compatible(query,pname):
                     continue
