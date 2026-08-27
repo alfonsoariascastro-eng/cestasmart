@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="es">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CestaSmart 3.0 Cloud</title>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CestaSmart 3.1 Cloud</title>
 <style>
 :root{--g:#1d8f55;--g2:#e7f6ed;--line:#e1e8e3;--ink:#17211b;--muted:#66736b;--red:#a33}
 *{box-sizing:border-box}body{margin:0;background:#f5f8f6;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;color:var(--ink)}
@@ -26,10 +26,10 @@ h2{font-size:17px;margin:0 0 10px}.small{font-size:12px;color:var(--muted)}input
   <h2>PRINCIPIO CESTASMART</h2>
   <div class="small"><b>Primero, el precio.</b> La app busca siempre la opción más económica manteniendo la misma calidad. La marca no influye salvo que el usuario la proteja expresamente.</div>
 </div>
-<div class="small">2.0 Cloud · catálogo maestro + PostgreSQL</div>
+<div class="small">3.1 Cloud · Eroski/Familia con precios directos + optimizador</div>
 
 <div class="card"><h2>Buscar producto</h2>
-<div class="row"><select id="searchStore"><option value="mercadona">Mercadona</option><option value="gadis">Gadis</option><option value="dia">DIA</option><option value="lidl">Lidl</option></select><input id="q" value="huevos 12 ud"><button class="primary" onclick="searchProduct()">Buscar</button></div>
+<div class="row"><select id="searchStore"><option value="mercadona">Mercadona</option><option value="gadis">Gadis</option><option value="dia">DIA</option><option value="lidl">Lidl</option><option value="eroski">Eroski</option><option value="familia">Familia</option></select><input id="q" value="huevos 12 ud"><button class="primary" onclick="searchProduct()">Buscar</button></div>
 <div style="margin-top:8px"><input id="ean" placeholder="EAN/GTIN opcional (si lo escaneas, tiene prioridad absoluta)"></div>
 <div class="toolbar">
 <button class="secondary" onclick="openScanner()">📷 Escanear EAN/GTIN</button>
@@ -65,6 +65,7 @@ h2{font-size:17px;margin:0 0 10px}.small{font-size:12px;color:var(--muted)}input
 <label class="store"><input type="checkbox" value="dia" checked> DIA</label>
 <label class="store"><input type="checkbox" value="lidl" checked> Lidl</label>
 <label class="store"><input type="checkbox" value="eroski" checked> Eroski</label>
+<label class="store"><input type="checkbox" value="familia" checked> Familia</label>
 </div><button class="primary" style="width:100%;margin-top:10px" onclick="compareBasket()">Comparar cesta</button><div id="compareResults"></div></div>
 
 <div class="card"><div class="small"><b>Equivalencia por unidades:</b> si no existe el mismo formato, CestaSmart calcula cuántas unidades del producto alternativo hacen falta para cubrir la cantidad solicitada y usa ese coste equivalente en la comparación.</div></div>

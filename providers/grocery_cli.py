@@ -3,6 +3,8 @@ import shutil
 import subprocess
 import re
 import unicodedata
+import urllib.request
+import html as html_lib
 
 class ProviderError(RuntimeError):
     pass
@@ -13,7 +15,8 @@ STORES = {
     "dia": {"label":"DIA","key":"dia","aliases":["dia"]},
     "lidl": {"label":"Lidl","key":"lidl-es","aliases":["lidl-es"]},
     "carrefour": {"label":"Carrefour","key":None},
-    "eroski":{"label":"Eroski","key":"eroski","aliases":["eroski"]}
+    "eroski":{"label":"Eroski","key":"eroski","aliases":["eroski"]},
+    "familia":{"label":"Familia","key":"familia-html","aliases":["familia"]}
 }
 
 def norm(s):
@@ -841,12 +844,6 @@ def generic_variant_compatible(query, product_name):
 
 
 EXTERNAL_CONNECTORS={
-    "familia":{
-        "label":"Familia",
-        "status":"PENDING_CUSTOM_CONNECTOR",
-        "enabled":False,
-        "reason":"Sin adaptador independiente estable en grocery-cli; requiere conector propio."
-    },
     "carrefour":{
         "label":"Carrefour",
         "status":"PENDING_SEPARATE_CONNECTOR",
@@ -854,6 +851,90 @@ EXTERNAL_CONNECTORS={
         "reason":"Catálogo protegido por sistemas anti-bot; se mantiene fuera del conector HTTP estándar."
     }
 }
+
+
+HTML_CATEGORY_PATHS={
+    "huevos":"/es/supermercado/2059698-frescos/2059760-huevos/",
+    "detergente":"/es/supermercado/2060538-limpieza/2060539-detergente-jabon-y-suavizante/",
+    "papel_higienico":"/es/supermercado/2060538-limpieza/2060592-papel-higienico-y-panuelos/",
+    "yogur":"/es/supermercado/2059806-alimentacion/2059818-yogures/2059819-yogur-natural/",
+    "cafe":"/es/supermercado/2060118-dulces-y-desayuno/2060119-la-tienda-del-cafe/2060120-cafe-molido/",
+    "salsa":"/es/supermercado/2059806-alimentacion/2060001-conservas-vegetales/2060002-tomate-frito/",
+}
+
+def _html_category_for_query(query):
+    q=norm(query)
+    c=category(query)
+    if "salsa" in q and "tomate" in q:
+        return "salsa"
+    return c
+
+def _strip_html_to_lines(raw):
+    # Lightweight parser: retain block boundaries, remove scripts/styles/tags.
+    raw=re.sub(r"(?is)<script.*?</script>|<style.*?</style>"," ",raw)
+    raw=re.sub(r"(?i)<br\s*/?>|</(?:h[1-6]|div|p|li|article|section|span)>","\n",raw)
+    raw=re.sub(r"(?s)<[^>]+>"," ",raw)
+    raw=html_lib.unescape(raw).replace("\xa0"," ")
+    return [re.sub(r"\s+"," ",x).strip() for x in raw.splitlines() if re.sub(r"\s+"," ",x).strip()]
+
+def _parse_store_html(raw, query):
+    lines=_strip_html_to_lines(raw)
+    products=[]
+    # Product names in these storefronts are repeated near the price and Add button.
+    for i,line in enumerate(lines):
+        n=norm(line)
+        if len(line)<5 or len(line)>220:
+            continue
+        # Broad name candidate; actual safety is enforced later by CestaSmart matching.
+        qcat=_html_category_for_query(query)
+        if qcat=="salsa":
+            nameish=("tomate" in n or "salsa" in n)
+        elif qcat=="papel_higienico":
+            nameish=("papel" in n and "higien" in n)
+        elif qcat=="huevos":
+            nameish=("huevo" in n)
+        elif qcat=="detergente":
+            nameish=("detergente" in n)
+        elif qcat=="yogur":
+            nameish=("yogur" in n)
+        elif qcat=="cafe":
+            nameish=("cafe" in n)
+        else:
+            nameish=token_similarity(query,line)>=0.45
+        if not nameish:
+            continue
+        # Scan forward only within a product-sized window. The last € amount before Añadir
+        # is normally the effective item price (after unit-price text / discounts).
+        prices=[]
+        promo_text=None
+        for j in range(i+1,min(len(lines),i+36)):
+            t=lines[j]
+            if j>i+2 and norm(t)==n:
+                continue
+            for m in re.finditer(r"(?<!\d)(\d{1,3}(?:[.,]\d{2}))\s*€",t):
+                try: prices.append(float(m.group(1).replace(",",".")))
+                except: pass
+            if any(x in t for x in ["-20%","-25%","-30%","2ª unidad","2x1","Comprando 2"]):
+                promo_text=t
+            if "Añadir" in t and prices:
+                break
+        if not prices:
+            continue
+        price=prices[-1]
+        original=max(prices) if len(prices)>1 and max(prices)>price else None
+        # Avoid obvious category headings.
+        if len(n.split())<3 and not re.search(r"\d",line):
+            continue
+        products.append({
+            "id":None,"name":line,"price":price,"ean":None,"gtin":None,"brand":None,
+            "promo_price":price if original else None,"original_price":original,
+            "promotion_text":promo_text,"category":qcat,"category_id":None,
+            "source":"HTML_DIRECT"
+        })
+    uniq={}
+    for x in products:
+        uniq[(norm(x["name"]),x["price"])]=x
+    return list(uniq.values())
 
 class GroceryCLI:
     _resolved_keys={}
@@ -1008,10 +1089,30 @@ class GroceryCLI:
         return result
 
 
+    def _html_direct_search(self,store,query,limit=60):
+        cat=_html_category_for_query(query)
+        path=HTML_CATEGORY_PATHS.get(cat)
+        if not path:
+            return []
+        host="https://www.familiaonline.es" if store=="familia" else "https://supermercado.eroski.es"
+        url=host+path
+        req=urllib.request.Request(url,headers={
+            "User-Agent":"Mozilla/5.0 (compatible; CestaSmart/3.1)",
+            "Accept-Language":"es-ES,es;q=0.9"
+        })
+        try:
+            with urllib.request.urlopen(req,timeout=25) as r:
+                raw=r.read().decode("utf-8","ignore")
+            return _parse_store_html(raw,query)[:limit]
+        except Exception:
+            return []
+
     def _raw_search(self,store,query,limit=40):
         cfg=STORES.get(store)
         if not cfg or not cfg.get("key"):
             return []
+        if store=="familia":
+            return self._html_direct_search("familia",query,limit)
         key="lidl-es" if store=="lidl" else cfg.get("key")
         products=[]
         # Standard search
@@ -1030,6 +1131,9 @@ class GroceryCLI:
             products.extend(self._collect_products(data2))
         except Exception:
             pass
+
+        if store=="eroski" and not products:
+            products.extend(self._html_direct_search("eroski",query,limit))
 
         uniq={}
         for p in products:
@@ -1052,7 +1156,7 @@ class GroceryCLI:
                 "label":cfg.get("label",key),
                 "status":"REAL_BETA",
                 "enabled":True,
-                "provider":"grocery-cli",
+                "provider":"HTML_DIRECT" if key=="familia" else ("grocery-cli + HTML fallback" if key=="eroski" else "grocery-cli"),
                 "key":cfg.get("key")
             }
         stores.update(EXTERNAL_CONNECTORS)
