@@ -854,12 +854,12 @@ EXTERNAL_CONNECTORS={
 
 
 HTML_CATEGORY_PATHS={
-    "huevos":"/es/supermercado/2059698-frescos/2059760-huevos/",
-    "detergente":"/es/supermercado/2060538-limpieza/2060539-detergente-jabon-y-suavizante/",
-    "papel_higienico":"/es/supermercado/2060538-limpieza/2060592-papel-higienico-y-panuelos/",
-    "yogur":"/es/supermercado/2059806-alimentacion/2059818-yogures/2059819-yogur-natural/",
-    "cafe":"/es/supermercado/2060118-dulces-y-desayuno/2060119-la-tienda-del-cafe/2060120-cafe-molido/",
-    "salsa":"/es/supermercado/2059806-alimentacion/2060001-conservas-vegetales/2060002-tomate-frito/",
+    "huevos":"2059698-frescos/2059760-huevos/",
+    "detergente":"2060538-limpieza/2060539-detergente-jabon-y-suavizante/",
+    "papel_higienico":"2060538-limpieza/2060592-papel-higienico-y-panuelos/",
+    "yogur":"2059806-alimentacion/2059818-yogures/2059819-yogur-natural/",
+    "cafe":"2060118-dulces-y-desayuno/2060119-la-tienda-del-cafe/2060120-cafe-molido/",
+    "salsa":"2059806-alimentacion/2060001-conservas-vegetales/2060002-tomate-frito/",
 }
 
 def _html_category_for_query(query):
@@ -935,6 +935,11 @@ def _parse_store_html(raw, query):
     for x in products:
         uniq[(norm(x["name"]),x["price"])]=x
     return list(uniq.values())
+
+def store_availability_status(store):
+    if store=="familia":
+        return {"available":False,"status":"CONNECTOR_PENDING","message":"Familia: conector de precios específico no disponible; se omite para no mezclar precios con Eroski."}
+    return {"available":True,"status":"REAL_BETA"}
 
 class GroceryCLI:
     _resolved_keys={}
@@ -1094,11 +1099,22 @@ class GroceryCLI:
         path=HTML_CATEGORY_PATHS.get(cat)
         if not path:
             return []
-        host="https://www.familiaonline.es" if store=="familia" else "https://supermercado.eroski.es"
-        url=host+path
+
+        # Eroski public domain returns 403 from Render, but this Worldline backend
+        # exposes the same Eroski catalogue server-side and is reachable.
+        if store=="eroski":
+            url="https://familia.eroski-gcp.eacc.global.worldline-solutions.com/es/supermercado/eroski/"+path
+        elif store=="familia":
+            # Do not reuse Eroski prices for Familia. If the Familia-specific
+            # storefront cannot be accessed safely, report no data instead.
+            return []
+        else:
+            return []
+
         req=urllib.request.Request(url,headers={
-            "User-Agent":"Mozilla/5.0 (compatible; CestaSmart/3.1)",
-            "Accept-Language":"es-ES,es;q=0.9"
+            "User-Agent":"Mozilla/5.0 (compatible; CestaSmart/3.2)",
+            "Accept-Language":"es-ES,es;q=0.9",
+            "Accept":"text/html,application/xhtml+xml"
         })
         try:
             with urllib.request.urlopen(req,timeout=25) as r:
