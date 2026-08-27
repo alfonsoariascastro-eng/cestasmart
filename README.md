@@ -89,3 +89,35 @@ CestaSmart calcula ahora dos escenarios:
 2. Mejor cesta dividida.
 
 Solo recomienda dividir la compra si el ahorro adicional supera el umbral elegido, teniendo en cuenta los costes extra de desplazamiento o entrega.
+
+
+# CestaSmart 3.0
+
+## Motor de equivalencias consolidado
+- Precio más bajo manteniendo la misma calidad.
+- Marca ignorada salvo restricción expresa.
+- Producto genérico: no introduce variantes especiales no solicitadas.
+- Equivalencia por packs/unidades.
+- Subtipos de producto.
+- Búsquedas ampliadas por categoría.
+- Filtros contra falsos positivos.
+- Cesta única vs cesta dividida.
+
+## Supermercados
+Activos en REAL_BETA:
+- Mercadona
+- Gadis
+- DIA
+- Lidl España
+- Eroski
+
+Preparados pero no activos todavía:
+- Familia: requiere conector propio.
+- Carrefour: requiere conector separado por protección anti-bot.
+
+## API
+- `/api/status`
+- `/api/connectors`
+- `/api/compare`
+- `/api/optimize`
+- `/api/diagnose/<store>`

@@ -12,7 +12,8 @@ STORES = {
     "gadis": {"label":"Gadis","key":"gadis","aliases":["gadis"]},
     "dia": {"label":"DIA","key":"dia","aliases":["dia"]},
     "lidl": {"label":"Lidl","key":"lidl-es","aliases":["lidl-es"]},
-    "carrefour": {"label":"Carrefour","key":None},
+    "carrefour": {"label":"Carrefour","key":None},,
+    "eroski":{"label":"Eroski","key":"eroski","aliases":["eroski"]}
 }
 
 def norm(s):
@@ -838,6 +839,22 @@ def generic_variant_compatible(query, product_name):
 
     return True,"variante compatible"
 
+
+EXTERNAL_CONNECTORS={
+    "familia":{
+        "label":"Familia",
+        "status":"PENDING_CUSTOM_CONNECTOR",
+        "enabled":False,
+        "reason":"Sin adaptador independiente estable en grocery-cli; requiere conector propio."
+    },
+    "carrefour":{
+        "label":"Carrefour",
+        "status":"PENDING_SEPARATE_CONNECTOR",
+        "enabled":False,
+        "reason":"Catálogo protegido por sistemas anti-bot; se mantiene fuera del conector HTTP estándar."
+    }
+}
+
 class GroceryCLI:
     _resolved_keys={}
 
@@ -1027,6 +1044,19 @@ class GroceryCLI:
         for p in products:
             uniq[(p.get("id"),p.get("name"),p.get("price"))]=p
         return list(uniq.values())
+
+    def connector_status(self):
+        stores={}
+        for key,cfg in STORES.items():
+            stores[key]={
+                "label":cfg.get("label",key),
+                "status":"REAL_BETA",
+                "enabled":True,
+                "provider":"grocery-cli",
+                "key":cfg.get("key")
+            }
+        stores.update(EXTERNAL_CONNECTORS)
+        return stores
 
     def search(self,store,query,limit=8,ean=None):
         cfg=STORES.get(store)

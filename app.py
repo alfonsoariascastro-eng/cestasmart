@@ -29,7 +29,7 @@ def static_zxing():
 def health():
     status={
         "ok": True,
-        "app":"CestaSmart 2.10 Cloud",
+        "app":"CestaSmart 3.0 Cloud",
         "grocery_cli":grocery.available(),
         "database":DB_READY,
     }
@@ -41,9 +41,13 @@ def health():
 def diagnose_store(store):
     return jsonify(grocery.diagnose_store(store))
 
+@app.route("/api/connectors")
+def connectors():
+    return jsonify(grocery.connector_status())
+
 @app.route("/api/status")
 def status():
-    data={"app":"CestaSmart 2.10 Cloud","grocery":grocery.status(),"database":DB_READY}
+    data={"app":"CestaSmart 3.0 Cloud","grocery":grocery.status(),"database":DB_READY}
     if DB_READY:
         try:data["catalog"]=catalog_stats()
         except Exception:pass

@@ -1,0 +1,37 @@
+{
+  "mercadona": {
+    "enabled": true,
+    "provider": "grocery-cli",
+    "key": "mercadona"
+  },
+  "gadis": {
+    "enabled": true,
+    "provider": "grocery-cli",
+    "key": "gadis"
+  },
+  "dia": {
+    "enabled": true,
+    "provider": "grocery-cli",
+    "key": "dia"
+  },
+  "lidl": {
+    "enabled": true,
+    "provider": "grocery-cli",
+    "key": "lidl-es"
+  },
+  "eroski": {
+    "enabled": true,
+    "provider": "grocery-cli",
+    "key": "eroski"
+  },
+  "familia": {
+    "enabled": false,
+    "provider": "custom",
+    "status": "pending"
+  },
+  "carrefour": {
+    "enabled": false,
+    "provider": "separate",
+    "status": "pending"
+  }
+}
