@@ -951,28 +951,41 @@ def detergent_form_compatible(query, product_name):
     if "detergente" not in qt:
         return True,"no aplica"
 
-    if "polvo" in qt:
-        return ("polvo" in pt, "se requiere detergente en polvo")
-    if qt & {"capsula","capsulas","pastillas","tabletas"}:
-        return (bool(pt & {"capsula","capsulas","pastillas","tabletas"}), "se requieren cápsulas/pastillas")
-    if "mano" in qt:
-        return ("mano" in pt, "se requiere lavado a mano")
+    polvo_terms={"polvo"}
+    liquido_terms={"liquido","líquido","gel"}
+    caps_terms={"capsula","capsulas","cápsula","cápsulas","pastillas","tabletas"}
+    mano_terms={"mano"}
 
-    # Si no se especifica formato, el estándar será líquido de lavadora.
-    if pt & {"polvo","capsula","capsulas","pastillas","tabletas","mano"}:
-        return False,"formato distinto al estándar líquido"
+    # Si el usuario especifica formato, respetarlo.
+    if qt & polvo_terms:
+        return (bool(pt & polvo_terms), "se requiere detergente en polvo")
+    if qt & liquido_terms:
+        if pt & (polvo_terms | caps_terms | mano_terms):
+            return False,"se requiere detergente líquido"
+        return True,"detergente líquido compatible"
+    if qt & caps_terms:
+        return (bool(pt & caps_terms), "se requieren cápsulas/pastillas")
+    if qt & mano_terms:
+        return (bool(pt & mano_terms), "se requiere lavado a mano")
 
-    # Evitar variantes especializadas salvo petición.
+    # Por defecto, detergente genérico = POLVO.
+    if not (pt & polvo_terms):
+        return False,"por defecto se requiere detergente en polvo"
+
+    # No introducir variantes especiales salvo petición expresa.
     specials = {
         "delicadas":{"delicada","delicadas","delicado","delicados"},
         "oscura":{"oscura","oscuras","negra","negras"},
         "bebe":{"bebe","bebé","infantil"},
+        "blanca":{"blanca","blancas"},
+        "color":{"color","colores"}
     }
-    for _,terms in specials.items():
+    for label,terms in specials.items():
         if pt & terms and not (qt & terms):
-            return False,"variante especializada no solicitada"
+            return False,f"variante especializada no solicitada: {label}"
 
-    return True,"formato líquido compatible"
+    return True,"detergente en polvo compatible"
+
 
 def _extract_eroski_package_price(block):
     if not block:
@@ -1127,6 +1140,40 @@ def comparable_line_total(query, product, requested_qty=1):
     total=base*packs*max(1,int(requested_qty or 1))
     return round(total,2),"coste equivalente"
 
+
+def egg_equivalence_compatible(query, product_name):
+    q=norm(query)
+    p=norm(product_name)
+    qt=set(q.split())
+    pt=set(p.split())
+
+    if "huevo" not in q and "huevos" not in q:
+        return True,"no aplica"
+
+    # Si el usuario pide tipo de cría, preservarlo.
+    requested_types = {
+        "campero":{"campero","camperos"},
+        "ecologico":{"ecologico","ecologicos","ecológico","ecológicos"},
+        "suelo":{"suelo"},
+    }
+    for label,terms in requested_types.items():
+        if qt & terms:
+            if not (pt & terms):
+                return False,f"tipo de huevo distinto: se requiere {label}"
+
+    # Si no especifica tamaño M/L/XL, no bloquear por tamaño.
+    if qt & {"xl","l","m","s"}:
+        requested_sizes = qt & {"xl","l","m","s"}
+        if not (pt & requested_sizes):
+            return False,"calibre de huevo distinto"
+
+    # La cantidad puede resolverse por packs equivalentes.
+    qf=parse_functional_unit(query)
+    pf=parse_functional_unit(product_name)
+    if qf and pf and qf.get("kind")=="egg" and pf.get("kind")=="egg":
+        return True,"cantidad convertible por packs de huevos"
+
+    return True,"huevo equivalente"
 class GroceryCLI:
     _resolved_keys={}
 
@@ -1392,6 +1439,11 @@ class GroceryCLI:
 
             variant_ok,variant_reason=generic_variant_compatible(query,p["name"])
             if variant_ok:
+                egg_ok,egg_reason=egg_equivalence_compatible(query,p["name"])
+                if not egg_ok:
+                    variant_ok=False
+                    variant_reason=egg_reason
+            if variant_ok:
                 form_ok,form_reason=detergent_form_compatible(query,p["name"])
                 if not form_ok:
                     variant_ok=False
@@ -1445,6 +1497,11 @@ class GroceryCLI:
                 if category(query) != category(pname):
                     continue
                 variant_ok,variant_reason=generic_variant_compatible(query,pname)
+                if variant_ok:
+                    egg_ok,egg_reason=egg_equivalence_compatible(query,pname)
+                    if not egg_ok:
+                        variant_ok=False
+                        variant_reason=egg_reason
                 if variant_ok:
                     form_ok,form_reason=detergent_form_compatible(query,pname)
                     if not form_ok:
@@ -1571,17 +1628,22 @@ class GroceryCLI:
                 "items":detail
             })
         rows.sort(key=lambda r:(r["unresolved"]>0,r["unresolved"],r["total"]))
+        complete_rows=[r for r in rows if int(r.get("unresolved") or 0)==0]
+        complete_rows.sort(key=lambda r:r.get("total",999999))
+
         return {
             "results":rows,
-            "best":rows[0] if rows else None,
+            "complete_results":complete_rows,
+            "best":complete_rows[0] if complete_rows else None,
+            "comparable":bool(complete_rows),
             "data_mode":"REAL_BETA",
-            "selection_policy":"precio_mas_bajo_misma_calidad",
+            "selection_policy":"solo_cestas_completas_y_equivalentes",
             "brand_policy":"ignorar_marca_salvo_restriccion_explicita"
         }
 
     def optimize(self,stores,items,options=None):
         comparison=self.compare(stores,items)
-        plan=optimize_basket_plan(comparison.get("results") or [],items,options or {})
+        plan=optimize_basket_plan(comparison.get("complete_results") or [],items,options or {})
         return {
             "comparison":comparison,
             "optimizer":plan,
