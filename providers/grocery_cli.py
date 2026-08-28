@@ -738,10 +738,9 @@ def _functional_match_relaxed(query, product_name):
     if not qf:
         return True,1.0,"sin unidad funcional solicitada"
     if not pf:
-        if category(query) in ("detergente","papel_higienico"):
-            return True,0.50,"cantidad no visible en nombre"
-        return False,0.0,"unidad funcional no legible"
-    if qf["kind"] != pf["kind"]:
+        return True,0.50,"cantidad no visible; producto exacto"
+
+    if qf.get("kind") != pf.get("kind"):
         return False,0.0,"unidad funcional distinta"
 
     qa=float(qf.get("amount") or 0)
@@ -750,7 +749,7 @@ def _functional_match_relaxed(query, product_name):
         return False,0.0,"cantidad funcional inválida"
 
     ratio=min(qa,pa)/max(qa,pa)
-    return True,ratio,"convertible por packs equivalentes"
+    return True,ratio,"cantidad normalizada proporcionalmente"
 
 
 def product_subtype(name):
@@ -1174,6 +1173,125 @@ def egg_equivalence_compatible(query, product_name):
         return True,"cantidad convertible por packs de huevos"
 
     return True,"huevo equivalente"
+
+def strict_product_identity(query, product_name):
+    q=norm(query)
+    p=norm(product_name)
+    qt=set(q.split())
+    pt=set(p.split())
+
+    try:
+        if _is_hard_false_positive(query, product_name):
+            return False, "falso positivo semántico"
+    except Exception:
+        pass
+
+    # Existing generic-variant rules.
+    try:
+        ok,reason=generic_variant_compatible(query,product_name)
+        if not ok:
+            return False,reason
+    except Exception:
+        pass
+
+    # Detergent format rule: generic detergent defaults to powder.
+    try:
+        ok,reason=detergent_form_compatible(query,product_name)
+        if not ok:
+            return False,reason
+    except Exception:
+        pass
+
+    # Eggs keep requested farming/calibre restrictions.
+    try:
+        ok,reason=egg_equivalence_compatible(query,product_name)
+        if not ok:
+            return False,reason
+    except Exception:
+        pass
+
+    # Natural yoghurt must remain plain natural yoghurt.
+    if "yogur" in qt and "natural" in qt:
+        forbidden={"azucar","azúcar","cana","caña","griego","griega","fresa","vainilla",
+                   "coco","limon","limón","melocoton","melocotón","proteico","proteina","proteína"}
+        extra=pt & forbidden
+        if extra and not (qt & extra):
+            return False, "yogur natural debe seguir siendo natural sin variantes añadidas"
+
+    # Never introduce physical-form changes unless explicitly requested.
+    forms={"polvo","liquido","líquido","gel","capsula","capsulas","cápsula","cápsulas","pastilla","pastillas"}
+    product_forms=pt & forms
+    query_forms=qt & forms
+    if product_forms and not query_forms:
+        # Exception handled above for generic detergent, whose default is powder.
+        if "detergente" not in qt:
+            return False, "formato físico no solicitado"
+
+    return True, "producto exacto"
+
+def proportional_equivalent_price(query, product, requested_qty=1):
+    """
+    Comparison price normalized exactly to the requested quantity.
+    Quantity may change; product identity may not.
+    """
+    if not isinstance(product,dict):
+        return None
+
+    ok,_=strict_product_identity(query,product.get("name") or "")
+    if not ok:
+        return None
+
+    base=product.get("package_price")
+    if base is None:
+        base=((product.get("offer") or {}).get("effective_price"))
+    if base is None:
+        base=product.get("price")
+    try:
+        base=float(base)
+    except:
+        return None
+    if base<=0:
+        return None
+
+    qf=parse_functional_unit(query)
+    pf=parse_functional_unit(product.get("name") or "")
+
+    if qf and pf and qf.get("kind")==pf.get("kind"):
+        qa=float(qf.get("amount") or 0)
+        pa=float(pf.get("amount") or 0)
+        if qa>0 and pa>0:
+            return round(base*(qa/pa)*max(1,int(requested_qty or 1)),4)
+
+    return round(base*max(1,int(requested_qty or 1)),4)
+
+def checkout_cost_for_requested_amount(query, product, requested_qty=1):
+    """
+    Real checkout amount using whole packs. Kept separate from comparison price.
+    """
+    if not isinstance(product,dict):
+        return None
+
+    base=product.get("package_price")
+    if base is None:
+        base=((product.get("offer") or {}).get("effective_price"))
+    if base is None:
+        base=product.get("price")
+    try:
+        base=float(base)
+    except:
+        return None
+
+    qf=parse_functional_unit(query)
+    pf=parse_functional_unit(product.get("name") or "")
+    if qf and pf and qf.get("kind")==pf.get("kind"):
+        qa=float(qf.get("amount") or 0)
+        pa=float(pf.get("amount") or 0)
+        if qa>0 and pa>0:
+            packs=max(1,math.ceil(qa/pa))
+            return round(base*packs*max(1,int(requested_qty or 1)),2)
+
+    return round(base*max(1,int(requested_qty or 1)),2)
+
 class GroceryCLI:
     _resolved_keys={}
 
@@ -1437,7 +1555,7 @@ class GroceryCLI:
                 rejected.append({"name":p["name"],"reason":"subtipo incompatible","category":p.get("category")})
                 continue
 
-            variant_ok,variant_reason=generic_variant_compatible(query,p["name"])
+            variant_ok,variant_reason=strict_product_identity(query,p["name"])
             if variant_ok:
                 egg_ok,egg_reason=egg_equivalence_compatible(query,p["name"])
                 if not egg_ok:
@@ -1496,7 +1614,7 @@ class GroceryCLI:
                     continue
                 if category(query) != category(pname):
                     continue
-                variant_ok,variant_reason=generic_variant_compatible(query,pname)
+                variant_ok,variant_reason=strict_product_identity(query,pname)
                 if variant_ok:
                     egg_ok,egg_reason=egg_equivalence_compatible(query,pname)
                     if not egg_ok:
@@ -1606,11 +1724,13 @@ class GroceryCLI:
                     units_needed=max(1,int(eq["units_needed"]))
 
                 base_price=((best.get("offer") or {}).get("effective_price")) or best["price"]
-                line,_reason=comparable_line_total(q,best,qty)
+                line=proportional_equivalent_price(q,best,qty)
+                _reason="producto no exactamente equivalente"
                 if line is None:
                     unresolved+=1
                     detail.append({"query":q,"qty":qty,"matched":None,"reason":_reason})
                     continue
+                real_checkout=checkout_cost_for_requested_amount(q,best,qty)
                 total+=line
                 detail.append({
                     "query":q,
@@ -1618,6 +1738,8 @@ class GroceryCLI:
                     "matched":best,
                     "units_needed":units_needed,
                     "line_total":round(line,2),
+                    "equivalent_requested_price":round(line,2),
+                    "checkout_cost":real_checkout if "real_checkout" in locals() else None,
                     "comparison_mode":"equivalent_units" if units_needed>1 else "direct"
                 })
             rows.append({
@@ -1637,7 +1759,7 @@ class GroceryCLI:
             "best":complete_rows[0] if complete_rows else None,
             "comparable":bool(complete_rows),
             "data_mode":"REAL_BETA",
-            "selection_policy":"solo_cestas_completas_y_equivalentes",
+            "selection_policy":"producto_exacto_cantidad_proporcional",
             "brand_policy":"ignorar_marca_salvo_restriccion_explicita"
         }
 
